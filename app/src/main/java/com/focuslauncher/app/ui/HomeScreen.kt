@@ -45,7 +45,10 @@ import kotlin.math.abs
 private const val SWIPE_UP_OPEN_THRESHOLD_PX = -60f
 private const val SWIPE_HORIZONTAL_THRESHOLD_PX = 90f
 private const val SCREEN_TIME_POLL_MS = 60_000L
-private val UPPER_DIAL_BOTTOM_PADDING = 96.dp
+// The upper dial sweeps a 180° arc, so a downward-pointing node sits a full radius
+// *below* its own anchor — this needs to clear the bottom dial's anchor/reveal area
+// below it, or the two visually collide and the upper dial reads as "cut off".
+private val UPPER_DIAL_BOTTOM_PADDING = 230.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -183,8 +186,6 @@ fun HomeScreen(
             onLaunch = onLaunch,
             modifier = Modifier.align(Alignment.BottomEnd),
         )
-
-        SpaceAsciiArt(modifier = Modifier.align(Alignment.Center))
     }
 }
 

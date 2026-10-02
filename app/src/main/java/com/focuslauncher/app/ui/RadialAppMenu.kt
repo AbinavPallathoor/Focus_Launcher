@@ -51,7 +51,8 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-private val RADIUS = 150.dp
+private val BASE_RADIUS = 150.dp
+private val MIN_NODE_SPACING = 56.dp
 private val ANCHOR_INSET = 40.dp
 private val NODE_DIAMETER = 44.dp
 private val MIN_SELECT_DISTANCE = 28.dp
@@ -98,7 +99,15 @@ fun RadialAppMenu(
     )
 
     val density = LocalDensity.current
-    val radiusPx = with(density) { RADIUS.toPx() }
+    // Grow the radius when there are enough apps that a fixed radius would pack their
+    // nodes closer together than their own diameter — the overlap seen with a full dial.
+    val sweepRad = Math.toRadians(sweepDeg.toDouble()).toFloat()
+    val radius = if (apps.isEmpty()) {
+        BASE_RADIUS
+    } else {
+        maxOf(BASE_RADIUS, MIN_NODE_SPACING * (apps.size / sweepRad))
+    }
+    val radiusPx = with(density) { radius.toPx() }
     val anchorInsetPx = with(density) { ANCHOR_INSET.toPx() }
     val minSelectPx = with(density) { MIN_SELECT_DISTANCE.toPx() }
 
@@ -130,7 +139,7 @@ fun RadialAppMenu(
                 var lastNodeDpX by remember { mutableStateOf(anchorDpX) }
                 var lastNodeDpY by remember { mutableStateOf(anchorDpY) }
                 if (selectedIndex != null) {
-                    val r = RADIUS * reveal
+                    val r = radius * reveal
                     val angleRad = nodeAngleRad(selectedIndex!!)
                     lastNodeDpX = anchorDpX - r * cos(angleRad).toFloat()
                     lastNodeDpY = anchorDpY - r * sin(angleRad).toFloat()
@@ -198,7 +207,7 @@ fun RadialAppMenu(
 
                 for (i in apps.indices) {
                     val angleRad = nodeAngleRad(i)
-                    val r = RADIUS * reveal
+                    val r = radius * reveal
                     val nodeX = anchorDpX - r * cos(angleRad).toFloat()
                     val nodeY = anchorDpY - r * sin(angleRad).toFloat()
                     RadialNode(
