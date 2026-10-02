@@ -1,21 +1,16 @@
 package com.focuslauncher.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -27,11 +22,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,15 +37,13 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.AppInfo
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -58,17 +51,30 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-private const val SWEEP_DEGREES = 90f
 private val RADIUS = 150.dp
 private val ANCHOR_INSET = 40.dp
 private val NODE_DIAMETER = 44.dp
 private val MIN_SELECT_DISTANCE = 28.dp
+private val CALLOUT_DIAGONAL = 32.dp
+private val CALLOUT_HORIZONTAL = 36.dp
+private val CALLOUT_BOX_WIDTH = 150.dp
+
+/** "Google Photos" -> "GP", "Chrome" -> "CH". */
+private fun abbreviate(label: String): String {
+    val words = label.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    return when {
+        words.size >= 2 -> (words[0].take(1) + words[1].take(1)).uppercase()
+        words.size == 1 -> words[0].take(2).uppercase()
+        else -> ""
+    }
+}
 
 /**
- * Bottom-right pull-and-rotate app launcher. Drag from the corner handle; as the finger
- * sweeps through the quarter-circle, the nearest app lights up along an animated radial
- * graph. Releasing on a lit node launches it. [bottomPadding] stacks multiple instances
- * vertically along the same corner.
+ * Pull-and-rotate app launcher anchored at the bottom-right corner. Drag from the handle;
+ * as the finger sweeps through the arc, the nearest app lights up and its name glides into
+ * a callout to the left. Releasing on a lit node launches it. [bottomPadding] stacks
+ * multiple instances vertically along the same corner; [startAngleDeg]/[sweepDeg] control
+ * the arc, measured from pointing left (0°) increasing clockwise toward up (90°).
  */
 @Composable
 fun RadialAppMenu(
@@ -76,6 +82,8 @@ fun RadialAppMenu(
     onLaunch: (AppInfo) -> Unit,
     modifier: Modifier = Modifier,
     bottomPadding: Dp = 0.dp,
+    startAngleDeg: Float = 0f,
+    sweepDeg: Float = 90f,
 ) {
     var isDragging by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
@@ -99,9 +107,12 @@ fun RadialAppMenu(
         val distance = sqrt(offset.x * offset.x + offset.y * offset.y)
         if (distance < minSelectPx) return null
         val angleDeg = Math.toDegrees(atan2((-offset.y).toDouble(), (-offset.x).toDouble())).toFloat()
-        if (angleDeg < 0f || angleDeg > SWEEP_DEGREES) return null
-        return (angleDeg / SWEEP_DEGREES * apps.size).toInt().coerceIn(0, apps.size - 1)
+        if (angleDeg < startAngleDeg || angleDeg > startAngleDeg + sweepDeg) return null
+        return (((angleDeg - startAngleDeg) / sweepDeg) * apps.size).toInt().coerceIn(0, apps.size - 1)
     }
+
+    fun nodeAngleRad(index: Int) =
+        Math.toRadians((startAngleDeg + (index + 0.5f) / apps.size * sweepDeg).toDouble())
 
     Box(modifier = modifier.fillMaxSize()) {
         if (reveal > 0.01f) {
@@ -110,6 +121,23 @@ fun RadialAppMenu(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.55f * reveal))
             ) {
+                val anchorDpX = maxWidth - ANCHOR_INSET
+                val anchorDpY = maxHeight - ANCHOR_INSET - bottomPadding
+
+                // Remember the last selected node's position so the callout can glide
+                // smoothly between apps instead of snapping, and hold still while fading
+                // out rather than sliding back to the anchor.
+                var lastNodeDpX by remember { mutableStateOf(anchorDpX) }
+                var lastNodeDpY by remember { mutableStateOf(anchorDpY) }
+                if (selectedIndex != null) {
+                    val r = RADIUS * reveal
+                    val angleRad = nodeAngleRad(selectedIndex!!)
+                    lastNodeDpX = anchorDpX - r * cos(angleRad).toFloat()
+                    lastNodeDpY = anchorDpY - r * sin(angleRad).toFloat()
+                }
+                val animatedNodeX by animateDpAsState(lastNodeDpX, label = "calloutX")
+                val animatedNodeY by animateDpAsState(lastNodeDpY, label = "calloutY")
+
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val anchor = Offset(
                         size.width - anchorInsetPx,
@@ -117,53 +145,27 @@ fun RadialAppMenu(
                     )
                     val r = radiusPx * reveal
 
-                    val nodePoints = apps.indices.map { i ->
-                        val angleRad = Math.toRadians(((i + 0.5f) / apps.size * SWEEP_DEGREES).toDouble())
-                        Offset(
-                            anchor.x - (cos(angleRad) * r).toFloat(),
-                            anchor.y - (sin(angleRad) * r).toFloat()
-                        )
-                    }
-
                     drawArc(
                         color = SubtextGrey.copy(alpha = 0.3f * reveal),
-                        startAngle = 180f,
-                        sweepAngle = SWEEP_DEGREES,
+                        startAngle = startAngleDeg + 180f,
+                        sweepAngle = sweepDeg,
                         useCenter = false,
                         topLeft = Offset(anchor.x - r, anchor.y - r),
                         size = Size(r * 2, r * 2),
                         style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
                     )
 
-                    // A connecting "graph" curve through every node, revealed as a
-                    // trace animation that tracks the same reveal progress.
-                    if (nodePoints.size >= 2) {
-                        val path = Path().apply {
-                            moveTo(nodePoints.first().x, nodePoints.first().y)
-                            for (i in 1 until nodePoints.size) {
-                                val prev = nodePoints[i - 1]
-                                val curr = nodePoints[i]
-                                val mid = Offset((prev.x + curr.x) / 2f, (prev.y + curr.y) / 2f)
-                                quadraticBezierTo(prev.x, prev.y, mid.x, mid.y)
-                            }
-                            lineTo(nodePoints.last().x, nodePoints.last().y)
-                        }
-                        val measure = PathMeasure().apply { setPath(path, false) }
-                        val tracedPath = Path()
-                        measure.getSegment(0f, measure.length * reveal, tracedPath, true)
-                        drawPath(
-                            path = tracedPath,
-                            color = PureWhite.copy(alpha = 0.3f * reveal),
-                            style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
-                        )
-                    }
-
                     for (i in apps.indices) {
+                        val angleRad = nodeAngleRad(i)
+                        val nodeOffset = Offset(
+                            anchor.x - (cos(angleRad) * r).toFloat(),
+                            anchor.y - (sin(angleRad) * r).toFloat()
+                        )
                         val selected = selectedIndex == i
                         drawLine(
                             color = if (selected) PureWhite else SubtextGrey.copy(alpha = 0.35f * reveal),
                             start = anchor,
-                            end = nodePoints[i],
+                            end = nodeOffset,
                             strokeWidth = if (selected) 2.5.dp.toPx() else 1.dp.toPx()
                         )
                     }
@@ -182,12 +184,20 @@ fun RadialAppMenu(
                             cap = StrokeCap.Round
                         )
                     }
+
+                    // Elbow leader line from the (animated) selected node: a 45° diagonal
+                    // segment, then a bend to horizontal, pointing at the callout box.
+                    if (selectedIndex != null) {
+                        val nodePx = Offset(animatedNodeX.toPx(), animatedNodeY.toPx())
+                        val cornerPx = Offset(nodePx.x - CALLOUT_DIAGONAL.toPx(), nodePx.y - CALLOUT_DIAGONAL.toPx())
+                        val boxAnchorPx = Offset(cornerPx.x - CALLOUT_HORIZONTAL.toPx(), cornerPx.y)
+                        drawLine(PureWhite, nodePx, cornerPx, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                        drawLine(PureWhite, cornerPx, boxAnchorPx, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                    }
                 }
 
-                val anchorDpX = maxWidth - ANCHOR_INSET
-                val anchorDpY = maxHeight - ANCHOR_INSET - bottomPadding
                 for (i in apps.indices) {
-                    val angleRad = Math.toRadians(((i + 0.5f) / apps.size * SWEEP_DEGREES).toDouble())
+                    val angleRad = nodeAngleRad(i)
                     val r = RADIUS * reveal
                     val nodeX = anchorDpX - r * cos(angleRad).toFloat()
                     val nodeY = anchorDpY - r * sin(angleRad).toFloat()
@@ -199,17 +209,24 @@ fun RadialAppMenu(
                 }
 
                 val selectedApp = selectedIndex?.let { apps.getOrNull(it) }
-                AnimatedVisibility(
-                    visible = selectedApp != null,
-                    enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.85f),
-                    exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.85f),
-                    modifier = Modifier.align(Alignment.Center),
-                ) {
-                    ScrambleText(
-                        text = selectedApp?.label ?: "",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 34.sp, letterSpacing = 1.sp),
-                        color = HackerGreen,
-                    )
+                if (selectedApp != null) {
+                    val boxAnchorX = animatedNodeX - CALLOUT_DIAGONAL - CALLOUT_HORIZONTAL
+                    val boxAnchorY = animatedNodeY - CALLOUT_DIAGONAL
+                    Box(
+                        modifier = Modifier
+                            .offset(x = boxAnchorX - CALLOUT_BOX_WIDTH, y = boxAnchorY - 20.dp)
+                            .width(CALLOUT_BOX_WIDTH)
+                            .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)))
+                            .background(PureBlack)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        ScrambleText(
+                            text = selectedApp.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = PureWhite,
+                        )
+                    }
                 }
             }
         }
@@ -303,9 +320,11 @@ private fun RadialNode(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = app.label.take(1).uppercase(),
-                style = MaterialTheme.typography.bodyLarge,
+                text = abbreviate(app.label),
+                style = MaterialTheme.typography.bodyMedium,
                 color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
             )
         }
     }

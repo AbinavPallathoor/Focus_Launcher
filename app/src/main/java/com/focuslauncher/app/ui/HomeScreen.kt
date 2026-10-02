@@ -64,7 +64,6 @@ fun HomeScreen(
     var accumulatedDx by remember { mutableStateOf(0f) }
     var accumulatedDy by remember { mutableStateOf(0f) }
     var gestureResolved by remember { mutableStateOf(false) }
-    var showBurst by remember { mutableStateOf(false) }
     val view = LocalView.current
 
     var hasUsageAccess by remember { mutableStateOf(DeviceUsage.hasUsageAccess(context)) }
@@ -112,10 +111,10 @@ fun HomeScreen(
                         accumulatedDy += amount.y
                         val absDx = abs(accumulatedDx)
                         val absDy = abs(accumulatedDy)
-                        if (accumulatedDy < SWIPE_UP_OPEN_THRESHOLD_PX && absDy > absDx && !showBurst) {
+                        if (accumulatedDy < SWIPE_UP_OPEN_THRESHOLD_PX && absDy > absDx) {
                             change.consume()
                             gestureResolved = true
-                            showBurst = true
+                            onOpenSearch()
                         } else if (absDx > SWIPE_HORIZONTAL_THRESHOLD_PX && absDx > absDy) {
                             change.consume()
                             gestureResolved = true
@@ -176,6 +175,8 @@ fun HomeScreen(
             onLaunch = onLaunch,
             modifier = Modifier.align(Alignment.BottomEnd),
             bottomPadding = UPPER_DIAL_BOTTOM_PADDING,
+            startAngleDeg = -90f,
+            sweepDeg = 180f,
         )
         RadialAppMenu(
             apps = bottomDialApps,
@@ -183,12 +184,7 @@ fun HomeScreen(
             modifier = Modifier.align(Alignment.BottomEnd),
         )
 
-        if (showBurst) {
-            DotGridBurst(onComplete = {
-                showBurst = false
-                onOpenSearch()
-            })
-        }
+        SpaceAsciiArt(modifier = Modifier.align(Alignment.Center))
     }
 }
 
