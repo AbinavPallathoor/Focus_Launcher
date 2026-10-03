@@ -18,6 +18,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -31,6 +32,9 @@ import com.focuslauncher.app.ui.FocusLauncherTheme
 import com.focuslauncher.app.ui.HomeScreen
 import com.focuslauncher.app.ui.SearchScreen
 import com.focuslauncher.app.ui.SettingsScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,10 +110,16 @@ private fun LauncherRoot() {
     val monthlyExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getMonthTotal(context) }
     val categoryTotalsMonth = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
     val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUnclassifiedCounterparts(context).size }
+    val pendingQuestion = remember(expenseRefreshTick) { ExpenseRepository.getNextPendingQuestion(context) }
+    val pendingQuestionCount = remember(expenseRefreshTick) { ExpenseRepository.getPendingQuestionCount(context) }
+    val coroutineScope = rememberCoroutineScope()
     val smsPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        // READ_SMS is the one that actually gates sync/classification — RECEIVE_SMS (for live
+        // updates the moment a new message arrives) is requested alongside it but optional:
+        // the feature still works via resume-time sync if that one alone gets denied.
+        if (results[Manifest.permission.READ_SMS] == true) {
             ExpenseRepository.setEnabled(context, true)
             expenseTrackerEnabled = true
             ExpenseRepository.syncSms(context)
@@ -121,6 +131,17 @@ private fun LauncherRoot() {
         ExpenseRepository.syncSms(context)
         expenseRefreshTick++
         screen = Screen.ExpenseTracker(returnTo)
+    }
+
+    // Both classifying and answering a question run real (slow) LLM inference — always off
+    // the main thread, never directly in a click handler.
+    fun answerQuestion(questionId: Long, answer: String) {
+        coroutineScope.launch {
+            withContext(Dispatchers.Default) {
+                ExpenseRepository.answerPendingQuestion(context, questionId, answer)
+            }
+            expenseRefreshTick++
+        }
     }
 
     fun refreshApps() {
@@ -158,6 +179,14 @@ private fun LauncherRoot() {
                 if (expenseTrackerEnabled) {
                     ExpenseRepository.syncSms(context)
                     expenseRefreshTick++
+                    // Classification runs real LLM inference — off the main thread, and after
+                    // the (fast) sync above so the UI already reflects the new SMS immediately.
+                    coroutineScope.launch {
+                        withContext(Dispatchers.Default) {
+                            ExpenseRepository.classifyUnknownTransactions(context)
+                        }
+                        expenseRefreshTick++
+                    }
                 }
                 screen = Screen.Home
             }
@@ -207,6 +236,9 @@ private fun LauncherRoot() {
                     categoryTotalsMonth = categoryTotalsMonth,
                     untaggedExpenseCount = untaggedExpenseCount,
                     onOpenExpenseTracker = { openExpenseTracker(Screen.Home) },
+                    pendingQuestion = pendingQuestion,
+                    pendingQuestionCount = pendingQuestionCount,
+                    onAnswerQuestion = { questionId, answer -> answerQuestion(questionId, answer) },
                 )
             }
             is Screen.Settings -> {
@@ -257,7 +289,9 @@ private fun LauncherRoot() {
                             ExpenseRepository.syncSms(context)
                             expenseRefreshTick++
                         } else {
-                            smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                            smsPermissionLauncher.launch(
+                                arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                            )
                         }
                     },
                     onOpenExpenseTracker = { openExpenseTracker(Screen.Settings) },

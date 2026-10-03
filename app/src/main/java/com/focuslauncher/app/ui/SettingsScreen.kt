@@ -1,5 +1,6 @@
 package com.focuslauncher.app.ui
 
+import android.app.DownloadManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -24,21 +25,29 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.AppInfo
+import com.focuslauncher.app.ModelDownloader
 import com.focuslauncher.app.RADIAL_GROUP_BOTTOM
 import com.focuslauncher.app.RADIAL_GROUP_UPPER
 import com.focuslauncher.app.SLOTS_PER_RADIAL_GROUP
 import com.focuslauncher.app.SwipeGesture
+import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -82,6 +91,7 @@ fun SettingsScreen(
             }
             if (expenseTrackerEnabled) {
                 item { ActionRow(label = "Open dashboard", onTap = onOpenExpenseTracker) }
+                item { ModelDownloadRow() }
             }
             item { SectionHeader("Gestures") }
             item {
@@ -288,6 +298,54 @@ private fun ToggleRow(label: String, value: Boolean, onToggle: () -> Unit) {
             color = if (value) PureWhite else SubtextGrey,
         )
     }
+}
+
+/**
+ * The on-device classifier's model, fetched directly from Hugging Face via DownloadManager (no
+ * login/token needed — the repo is public). Polls progress every 500ms only while a download is
+ * actually in flight, so this is cheap to leave mounted the rest of the time.
+ */
+@Composable
+private fun ModelDownloadRow() {
+    val context = LocalContext.current
+    var modelReady by remember { mutableStateOf(ModelDownloader.isModelReady(context)) }
+    var progress by remember { mutableStateOf(ModelDownloader.currentProgress(context)) }
+
+    // Keyed on Unit (never restarts) rather than on a value this same loop mutates — keying
+    // it off e.g. "isActive" would cancel this coroutine the instant it flips isActive to
+    // false, right before the line that actually records completion ever runs.
+    LaunchedEffect(Unit) {
+        while (!modelReady) {
+            val latest = ModelDownloader.currentProgress(context)
+            progress = latest
+            val active = latest != null &&
+                (latest.status == DownloadManager.STATUS_RUNNING || latest.status == DownloadManager.STATUS_PENDING)
+            if (!active) modelReady = ModelDownloader.isModelReady(context)
+            delay(if (active) 500 else 1500)
+        }
+    }
+
+    val isActive = progress?.status == DownloadManager.STATUS_RUNNING || progress?.status == DownloadManager.STATUS_PENDING
+    val label = when {
+        modelReady -> "AI model ready"
+        isActive -> "Downloading AI model… ${((progress?.fraction ?: 0f) * 100).toInt()}%"
+        progress?.status == DownloadManager.STATUS_FAILED -> "Download failed — tap to retry"
+        else -> "Download AI model (1.0 GB, Wi-Fi)"
+    }
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyLarge,
+        color = if (modelReady) PureWhite else SubtextGrey,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !modelReady && !isActive) {
+                ModelDownloader.startDownload(context)
+                progress = ModelDownloader.currentProgress(context)
+            }
+            .padding(vertical = 10.dp)
+    )
 }
 
 @Composable
