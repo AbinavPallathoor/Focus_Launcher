@@ -50,6 +50,21 @@ gesture-driven radial dials for quick app launching, and a full-text search.
 - Status bar is hidden, and system window/activity-open animations are disabled for this
   activity, so the home screen reads as the persistent OS shell rather than an app that
   keeps opening and closing on top of it.
+- **Expense tracker** (optional — enable under Settings → Expense tracker) — reads bank/UPI
+  debit alerts straight out of the SMS inbox and tracks spend locally, nothing leaves the
+  device. Enabling it for the first time pulls in today's messages only, not the device's
+  entire SMS history; every check after that is purely incremental. The dashboard
+  (Settings → Open dashboard) shows:
+  - Today's total, animating in like an odometer when a background re-sync finds new spend.
+  - Any merchant seen for the first time, with one-tap category chips (Food / Transport /
+    Essentials / Extras / Subscription) — tagging it retroactively re-tags all of its past
+    transactions too, and it's remembered for every future one.
+  - A per-category breakdown with animated proportional bars.
+  - A 14-day line graph that grows up from the baseline whenever the data changes.
+  - A list of recent transactions.
+  - Bank SMS formats vary a lot and there's no universal standard, so parsing (in
+    `SmsTransactionParser.kt`) covers common Indian bank/UPI debit phrasing — extend its
+    regexes for formats it doesn't already catch.
 
 ## Project structure
 
@@ -64,6 +79,10 @@ app/src/main/java/com/focuslauncher/app/
 ├── DeviceUsage.kt            — today's screen time via UsageStatsManager
 ├── CalendarRepository.kt     — next upcoming event via the device's calendar provider
 ├── PackageChangeReceiver.kt  — refreshes the app list on install/uninstall
+├── ExpenseCategory.kt        — the 5 fixed spend categories
+├── ExpenseDbHelper.kt        — SQLite schema for transactions + merchant→category tags
+├── SmsTransactionParser.kt   — regex parsing of bank/UPI debit SMS into amount + merchant
+├── ExpenseRepository.kt      — SMS sync, tagging, and dashboard queries
 └── ui/
     ├── Theme.kt              — black/white/grey palette, monospace typography
     ├── DotMatrixClock.kt     — the segmented clock display
@@ -71,7 +90,8 @@ app/src/main/java/com/focuslauncher/app/
     ├── RadialAppMenu.kt      — the pull-and-rotate dial menu
     ├── ScrambleText.kt       — hacker-style decrypt text animation
     ├── SearchScreen.kt       — full-screen search overlay + app action menu
-    └── SettingsScreen.kt     — dial slot, gesture, and hidden-app configuration
+    ├── SettingsScreen.kt     — dial slot, gesture, hidden-app, expense-tracker config
+    └── ExpenseTrackerScreen.kt — spend dashboard: totals, categories, graph, tagging
 ```
 
 ## Building
@@ -100,6 +120,9 @@ Requires Android Studio (or a local Gradle + Android SDK install). `minSdk 26`, 
   notification shade on swipe-down, the same way every other custom launcher does (there's
   no public API for this, just a long-standing reflection call against the hidden
   `StatusBarManager`).
+- `READ_SMS` — only used if the expense tracker is enabled, requested at runtime from the
+  Settings toggle. The tracker never sends a message and never leaves the device; it only
+  reads inbox messages that parse as a bank/UPI debit alert.
 
 ## Known limitations
 

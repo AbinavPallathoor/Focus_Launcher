@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,6 +56,9 @@ fun SettingsScreen(
     onClearGesture: (gesture: SwipeGesture) -> Unit,
     hiddenApps: List<AppInfo>,
     onUnhideApp: (AppInfo) -> Unit,
+    expenseTrackerEnabled: Boolean,
+    onToggleExpenseTracker: () -> Unit,
+    onOpenExpenseTracker: () -> Unit,
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
@@ -108,6 +112,17 @@ fun SettingsScreen(
                     onTap = { onPickGesture(SwipeGesture.RIGHT) },
                     onClear = { onClearGesture(SwipeGesture.RIGHT) },
                 )
+            }
+            item { SectionHeader("Expense tracker") }
+            item {
+                ToggleRow(
+                    label = "Track SMS expenses",
+                    value = expenseTrackerEnabled,
+                    onToggle = onToggleExpenseTracker,
+                )
+            }
+            if (expenseTrackerEnabled) {
+                item { ActionRow(label = "Open dashboard", onTap = onOpenExpenseTracker) }
             }
             if (hiddenApps.isNotEmpty()) {
                 item { SectionHeader("Hidden apps") }
@@ -255,6 +270,37 @@ private fun PreviewNode(
             overflow = TextOverflow.Clip,
         )
     }
+}
+
+@Composable
+private fun ToggleRow(label: String, value: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(vertical = 10.dp),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyLarge, color = PureWhite)
+        Box(modifier = Modifier.weight(1f))
+        Text(
+            text = if (value) "On" else "Off",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (value) PureWhite else SubtextGrey,
+        )
+    }
+}
+
+@Composable
+private fun ActionRow(label: String, onTap: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyLarge,
+        color = PureWhite,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .padding(vertical = 10.dp)
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
