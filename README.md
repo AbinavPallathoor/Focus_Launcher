@@ -52,9 +52,12 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   keeps opening and closing on top of it.
 - **Expense tracker** (optional — enable under Settings → Expense tracker, now the first
   section) — reads bank/UPI debit alerts straight out of the SMS inbox and tracks spend
-  locally, nothing leaves the device. Enabling it for the first time pulls in today's
-  messages only, not the device's entire SMS history; every check after that is purely
-  incremental.
+  locally, nothing leaves the device. Enabling it for the first time pulls in the current
+  calendar month's messages (not the device's entire SMS history), so "this month" is
+  correct from the moment it's turned on; every check after that is purely incremental.
+  Totals always include every synced transaction, tagged or not — tagging only fills in
+  the category breakdown, so you're never stuck waiting to tag before you see what you've
+  spent.
   - **On the home screen itself**, below the calendar block: today's total as the headline
     with this month's total as a smaller line beneath it, a bar graph of categories sorted
     shortest to tallest left-to-right (only categories with spend so far are shown, to cut
