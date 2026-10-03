@@ -1,9 +1,12 @@
 package com.focuslauncher.app
 
+import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.tween
@@ -23,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.focuslauncher.app.ui.ExpenseTrackerScreen
 import com.focuslauncher.app.ui.FocusLauncherTheme
 import com.focuslauncher.app.ui.HomeScreen
 import com.focuslauncher.app.ui.SearchScreen
@@ -64,6 +68,7 @@ class MainActivity : ComponentActivity() {
 private sealed class Screen {
     data object Home : Screen()
     data object Settings : Screen()
+    data object ExpenseTracker : Screen()
     data class Search(
         val onPicked: ((AppInfo) -> Unit)? = null,
         val returnTo: Screen = Home,
@@ -92,6 +97,19 @@ private fun LauncherRoot() {
         )
     }
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+
+    var expenseTrackerEnabled by remember { mutableStateOf(ExpenseRepository.isEnabled(context)) }
+    var expenseRefreshTick by remember { mutableStateOf(0) }
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            ExpenseRepository.setEnabled(context, true)
+            expenseTrackerEnabled = true
+            ExpenseRepository.syncSms(context)
+            expenseRefreshTick++
+        }
+    }
 
     fun refreshApps() {
         allApps = AppRepository.getInstalledApps(context)
@@ -125,6 +143,10 @@ private fun LauncherRoot() {
                 refreshApps()
                 refreshRadialGroups()
                 refreshGestureApps()
+                if (expenseTrackerEnabled) {
+                    ExpenseRepository.syncSms(context)
+                    expenseRefreshTick++
+                }
                 screen = Screen.Home
             }
         }
@@ -206,7 +228,45 @@ private fun LauncherRoot() {
                         HiddenAppsStore.setHidden(context, app.key, false)
                         refreshHidden()
                     },
+                    expenseTrackerEnabled = expenseTrackerEnabled,
+                    onToggleExpenseTracker = {
+                        if (expenseTrackerEnabled) {
+                            ExpenseRepository.setEnabled(context, false)
+                            expenseTrackerEnabled = false
+                        } else if (ExpenseRepository.hasSmsPermission(context)) {
+                            ExpenseRepository.setEnabled(context, true)
+                            expenseTrackerEnabled = true
+                            ExpenseRepository.syncSms(context)
+                            expenseRefreshTick++
+                        } else {
+                            smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                        }
+                    },
+                    onOpenExpenseTracker = {
+                        ExpenseRepository.syncSms(context)
+                        expenseRefreshTick++
+                        screen = Screen.ExpenseTracker
+                    },
                     onClose = { screen = Screen.Home },
+                )
+            }
+            is Screen.ExpenseTracker -> {
+                val untagged = remember(expenseRefreshTick) { ExpenseRepository.getUntaggedMerchants(context) }
+                val todayTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
+                val categoryTotals = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsToday(context) }
+                val dailyTotals = remember(expenseRefreshTick) { ExpenseRepository.getDailyTotals(context, 14) }
+                val recentTransactions = remember(expenseRefreshTick) { ExpenseRepository.getRecentTransactions(context) }
+                ExpenseTrackerScreen(
+                    todayTotal = todayTotal,
+                    categoryTotals = categoryTotals,
+                    dailyTotals = dailyTotals,
+                    untaggedMerchants = untagged,
+                    recentTransactions = recentTransactions,
+                    onTagMerchant = { merchant, category ->
+                        ExpenseRepository.tagMerchant(context, merchant, category)
+                        expenseRefreshTick++
+                    },
+                    onClose = { screen = Screen.Settings },
                 )
             }
             is Screen.Search -> {
