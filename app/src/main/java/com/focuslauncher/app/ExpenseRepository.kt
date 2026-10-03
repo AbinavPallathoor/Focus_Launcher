@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +33,15 @@ object ExpenseRepository {
 
     /** Net balance with one person: positive = they owe the user, negative = user owes them. */
     data class PersonBalance(val name: String, val netAmount: Double)
+
+    data class PendingQuestion(
+        val id: Long,
+        val transactionId: Long,
+        val questionText: String,
+        val options: List<String>,
+        val counterpartName: String,
+        val amount: Double,
+    )
 
     private const val PREFS = "expense_tracker"
     private const val KEY_ENABLED = "enabled"
@@ -116,6 +126,159 @@ object ExpenseRepository {
             }
         }
         db.insertWithOnConflict("transactions", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    private fun applyGuessToTransaction(
+        db: SQLiteDatabase, transactionId: Long, kind: TransactionKind,
+        category: ExpenseCategory?, confidence: Float, resolvedBy: ResolvedBy,
+    ) {
+        db.execSQL(
+            "UPDATE transactions SET kind = ?, category = ?, confidence = ?, resolved_by = ? WHERE id = ?",
+            arrayOf(kind.name, category?.name, confidence.toDouble(), resolvedBy.name, transactionId.toString())
+        )
+    }
+
+    /**
+     * Runs the on-device classifier against up to [limit] UNKNOWN transactions, oldest first.
+     * Blocking and potentially slow (real LLM inference per genuinely-new counterpart) — callers
+     * must invoke this from a background thread/coroutine, never the main thread. A counterpart
+     * that already has a memory hit (e.g. classified earlier in this same batch, or manually
+     * since the transaction was recorded) skips the LLM entirely.
+     */
+    fun classifyUnknownTransactions(context: Context, limit: Int = 5) {
+        val db = ExpenseDbHelper(context).writableDatabase
+        try {
+            val candidates = mutableListOf<Pair<Long, ParsedTransaction>>()
+            db.rawQuery(
+                "SELECT id, amount, counterpart_name, direction FROM transactions WHERE kind = 'UNKNOWN' ORDER BY timestamp ASC LIMIT ?",
+                arrayOf(limit.toString())
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    candidates.add(
+                        cursor.getLong(0) to ParsedTransaction(
+                            amount = cursor.getDouble(1),
+                            counterpartName = cursor.getString(2),
+                            direction = TransactionDirection.valueOf(cursor.getString(3)),
+                        )
+                    )
+                }
+            }
+            if (candidates.isEmpty()) return
+            val examples = MemoryStore.recentExamples(db)
+
+            for ((transactionId, parsed) in candidates) {
+                val memoryHit = MemoryStore.lookup(db, parsed.counterpartName)
+                if (memoryHit != null) {
+                    applyGuessToTransaction(db, transactionId, memoryHit.kind, memoryHit.category, 1.0f, ResolvedBy.MEMORY)
+                    continue
+                }
+                val result = TransactionClassifier.classify(context, parsed, examples) ?: continue
+                if (result.questions.isEmpty()) {
+                    applyGuessToTransaction(db, transactionId, result.guess.kind, result.guess.category, result.guess.confidence, ResolvedBy.LLM)
+                    MemoryStore.remember(db, parsed.counterpartName, result.guess.kind, result.guess.category, result.guess.isPerson)
+                } else {
+                    result.questions.forEachIndexed { index, question ->
+                        val values = ContentValues().apply {
+                            put("transaction_id", transactionId)
+                            put("question_index", index)
+                            put("question_text", question.text)
+                            put("options_json", JSONArray(question.options).toString())
+                        }
+                        db.insert("pending_questions", null, values)
+                    }
+                }
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    fun getPendingQuestionCount(context: Context): Int {
+        val db = ExpenseDbHelper(context).readableDatabase
+        try {
+            db.rawQuery("SELECT COUNT(*) FROM pending_questions WHERE answered_option IS NULL", null).use { cursor ->
+                cursor.moveToFirst()
+                return cursor.getInt(0)
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** The oldest unanswered question across all transactions — what the home screen card shows. */
+    fun getNextPendingQuestion(context: Context): PendingQuestion? {
+        val db = ExpenseDbHelper(context).readableDatabase
+        try {
+            db.rawQuery(
+                """SELECT pq.id, pq.transaction_id, pq.question_text, pq.options_json, t.counterpart_name, t.amount
+                   FROM pending_questions pq JOIN transactions t ON t.id = pq.transaction_id
+                   WHERE pq.answered_option IS NULL
+                   ORDER BY pq.transaction_id ASC, pq.question_index ASC
+                   LIMIT 1""",
+                null
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return null
+                val options = JSONArray(cursor.getString(3)).let { arr -> (0 until arr.length()).map { arr.getString(it) } }
+                return PendingQuestion(
+                    id = cursor.getLong(0),
+                    transactionId = cursor.getLong(1),
+                    questionText = cursor.getString(2),
+                    options = options,
+                    counterpartName = cursor.getString(4),
+                    amount = cursor.getDouble(5),
+                )
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * Records the chosen answer. Once every question queued for that transaction has an answer,
+     * re-runs the classifier with the full Q&A transcript appended so it can synthesize a final
+     * answer instead of asking anything further — blocking/slow like [classifyUnknownTransactions],
+     * so callers must invoke this off the main thread.
+     */
+    fun answerPendingQuestion(context: Context, questionId: Long, answer: String) {
+        val db = ExpenseDbHelper(context).writableDatabase
+        try {
+            db.execSQL("UPDATE pending_questions SET answered_option = ? WHERE id = ?", arrayOf(answer, questionId.toString()))
+
+            val transactionId = db.rawQuery(
+                "SELECT transaction_id FROM pending_questions WHERE id = ?", arrayOf(questionId.toString())
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else return }
+
+            val unanswered = db.rawQuery(
+                "SELECT COUNT(*) FROM pending_questions WHERE transaction_id = ? AND answered_option IS NULL",
+                arrayOf(transactionId.toString())
+            ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
+            if (unanswered > 0) return // more questions still queued for this same transaction
+
+            val qaHistory = db.rawQuery(
+                "SELECT question_text, answered_option FROM pending_questions WHERE transaction_id = ? ORDER BY question_index",
+                arrayOf(transactionId.toString())
+            ).use { cursor ->
+                val list = mutableListOf<Pair<String, String>>()
+                while (cursor.moveToNext()) list.add(cursor.getString(0) to cursor.getString(1))
+                list
+            }
+            val parsed = db.rawQuery(
+                "SELECT amount, counterpart_name, direction FROM transactions WHERE id = ?", arrayOf(transactionId.toString())
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                ParsedTransaction(cursor.getDouble(0), cursor.getString(1), TransactionDirection.valueOf(cursor.getString(2)))
+            }
+
+            val examples = MemoryStore.recentExamples(db)
+            val result = TransactionClassifier.classify(context, parsed, examples, qaHistory)
+            if (result != null) {
+                applyGuessToTransaction(db, transactionId, result.guess.kind, result.guess.category, maxOf(result.guess.confidence, 0.9f), ResolvedBy.USER)
+                MemoryStore.remember(db, parsed.counterpartName, result.guess.kind, result.guess.category, result.guess.isPerson)
+            }
+            db.delete("pending_questions", "transaction_id = ?", arrayOf(transactionId.toString()))
+        } finally {
+            db.close()
+        }
     }
 
     /**

@@ -58,6 +58,7 @@ import com.focuslauncher.app.AppInfo
 import com.focuslauncher.app.CalendarRepository
 import com.focuslauncher.app.DeviceUsage
 import com.focuslauncher.app.ExpenseCategory
+import com.focuslauncher.app.ExpenseRepository
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -91,6 +92,9 @@ fun HomeScreen(
     categoryTotalsMonth: Map<ExpenseCategory, Double>,
     untaggedExpenseCount: Int,
     onOpenExpenseTracker: () -> Unit,
+    pendingQuestion: ExpenseRepository.PendingQuestion?,
+    pendingQuestionCount: Int,
+    onAnswerQuestion: (questionId: Long, answer: String) -> Unit,
 ) {
     val context = LocalContext.current
     val time = rememberCurrentTime()
@@ -301,6 +305,21 @@ fun HomeScreen(
             onLaunch = onLaunch,
             modifier = Modifier.align(Alignment.BottomEnd),
         )
+
+        if (pendingQuestion != null) {
+            var dismissed by remember(pendingQuestion.id) { mutableStateOf(false) }
+            if (!dismissed) {
+                PendingQuestionCard(
+                    question = pendingQuestion,
+                    queuedCount = pendingQuestionCount,
+                    onAnswer = { answer -> onAnswerQuestion(pendingQuestion.id, answer) },
+                    onDismiss = { dismissed = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(24.dp),
+                )
+            }
+        }
     }
 }
 
@@ -438,6 +457,80 @@ private fun DashboardButton(untaggedCount: Int, modifier: Modifier = Modifier) {
                     text = untaggedCount.toString(),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                     color = PureBlack,
+                )
+            }
+        }
+    }
+}
+
+private val QUESTION_CARD_WIDTH = 230.dp
+
+/**
+ * The on-device classifier couldn't resolve a transaction on its own — one short MCQ at a
+ * time, in the free space bottom-left (the dials own bottom-right). Entirely optional to
+ * answer: dismissing just hides it for this session, the question stays queued and reappears
+ * next time the app is reopened. A `>`-prefixed option list matches the calendar block's own
+ * convention for this kind of inline list.
+ */
+@Composable
+private fun PendingQuestionCard(
+    question: ExpenseRepository.PendingQuestion,
+    queuedCount: Int,
+    onAnswer: (String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .width(QUESTION_CARD_WIDTH)
+            .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = 0.5f)))
+            .background(PureBlack)
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${question.counterpartName} · ${formatExpenseAmount(question.amount)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = SubtextGrey,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (queuedCount > 1) {
+                Text(
+                    text = "+${queuedCount - 1}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SubtextGrey,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
+            Text(
+                text = "×",
+                style = MaterialTheme.typography.bodyMedium,
+                color = SubtextGrey,
+                modifier = Modifier
+                    .padding(start = 10.dp)
+                    .clickable(onClick = onDismiss),
+            )
+        }
+        Text(
+            text = question.questionText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = PureWhite,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Column(modifier = Modifier.padding(top = 8.dp)) {
+            question.options.forEach { option ->
+                Text(
+                    text = "> $option",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SubtextGrey,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onAnswer(option) }
+                        .padding(vertical = 4.dp),
                 )
             }
         }
