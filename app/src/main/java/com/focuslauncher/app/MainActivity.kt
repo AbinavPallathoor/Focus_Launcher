@@ -105,7 +105,7 @@ private fun LauncherRoot() {
     val todayExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
     val monthlyExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getMonthTotal(context) }
     val categoryTotalsMonth = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
-    val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUntaggedCount(context) }
+    val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUnclassifiedCounterparts(context).size }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -265,19 +265,19 @@ private fun LauncherRoot() {
                 )
             }
             is Screen.ExpenseTracker -> {
-                val untagged = remember(expenseRefreshTick) { ExpenseRepository.getUntaggedMerchants(context) }
+                val unclassified = remember(expenseRefreshTick) { ExpenseRepository.getUnclassifiedCounterparts(context) }
                 val todayTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
-                val categoryTotals = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsToday(context) }
+                val categoryTotals = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
                 val dailyTotals = remember(expenseRefreshTick) { ExpenseRepository.getDailyTotals(context, 14) }
                 val recentTransactions = remember(expenseRefreshTick) { ExpenseRepository.getRecentTransactions(context) }
                 ExpenseTrackerScreen(
                     todayTotal = todayTotal,
                     categoryTotals = categoryTotals,
                     dailyTotals = dailyTotals,
-                    untaggedMerchants = untagged,
+                    untaggedMerchants = unclassified,
                     recentTransactions = recentTransactions,
-                    onTagMerchant = { merchant, category ->
-                        ExpenseRepository.tagMerchant(context, merchant, category)
+                    onTagMerchant = { counterpart, category ->
+                        ExpenseRepository.classify(context, counterpart, TransactionKind.EXPENSE, category, isPerson = false)
                         expenseRefreshTick++
                     },
                     onClose = { screen = currentScreen.returnTo },

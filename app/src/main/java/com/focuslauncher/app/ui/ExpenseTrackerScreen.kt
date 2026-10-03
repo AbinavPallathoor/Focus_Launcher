@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.ExpenseCategory
 import com.focuslauncher.app.ExpenseRepository
+import com.focuslauncher.app.TransactionKind
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -320,14 +321,17 @@ private fun TransactionRow(transaction: ExpenseRepository.Transaction, modifier:
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = transaction.merchant,
+                text = transaction.counterpartName,
                 style = MaterialTheme.typography.bodyMedium,
                 color = PureWhite,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            val statusLabel = transaction.category?.label
+                ?: transaction.kind.takeIf { it != TransactionKind.UNKNOWN }?.label
+                ?: "Unclassified"
             Text(
-                text = "${transaction.category?.label ?: "Uncategorized"} · ${dateFormat.format(Date(transaction.timestamp))}",
+                text = "$statusLabel · ${dateFormat.format(Date(transaction.timestamp))}",
                 style = MaterialTheme.typography.bodySmall,
                 color = SubtextGrey,
             )
