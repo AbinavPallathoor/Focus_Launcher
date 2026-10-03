@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,8 +20,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +52,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -248,7 +254,20 @@ fun SearchScreen(
     }
 }
 
-/** The long-press action row — same icon pack, same size, filled monochrome, pops in. */
+// Matches the row's own vertical.padding(10dp)*2 + bodyLarge line height — the elbow
+// starts below this so the box never sits over the app name itself.
+private val MENU_ROW_HEIGHT = 54.dp
+private val MENU_DIAGONAL = 26.dp
+private val MENU_HORIZONTAL = 32.dp
+private val MENU_START_INSET = 8.dp
+private val MENU_BOX_HALF_HEIGHT = 26.dp
+
+/**
+ * The long-press action menu — same elbow-leader-line language as the radial dial's
+ * callout: a 45° diagonal off the row, then a bend to horizontal, into a box of filled
+ * monochrome icons (same pack, same size). Anchored below the row so it never covers
+ * the app name above it.
+ */
 @Composable
 private fun AppActionMenu(
     onUninstall: () -> Unit,
@@ -261,18 +280,31 @@ private fun AppActionMenu(
         enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.85f),
         exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.85f),
     ) {
-        Row(
-            modifier = Modifier
-                .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)), RoundedCornerShape(8.dp))
-                .background(PureBlack, RoundedCornerShape(8.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(22.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ActionIcon(Icons.Filled.Delete, "Uninstall", onUninstall)
-            ActionIcon(Icons.Filled.Edit, "Rename", onRename)
-            ActionIcon(Icons.Filled.VisibilityOff, "Hide", onHide)
-            ActionIcon(Icons.Filled.Close, "Close", onCloseApp)
+        Box(modifier = Modifier.width(300.dp).height(140.dp)) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val anchor = Offset(MENU_START_INSET.toPx(), MENU_ROW_HEIGHT.toPx())
+                val corner = Offset(anchor.x + MENU_DIAGONAL.toPx(), anchor.y + MENU_DIAGONAL.toPx())
+                val boxAnchor = Offset(corner.x + MENU_HORIZONTAL.toPx(), corner.y)
+                drawLine(PureWhite, anchor, corner, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(PureWhite, corner, boxAnchor, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+            }
+            Row(
+                modifier = Modifier
+                    .offset(
+                        x = MENU_START_INSET + MENU_DIAGONAL + MENU_HORIZONTAL,
+                        y = MENU_ROW_HEIGHT + MENU_DIAGONAL - MENU_BOX_HALF_HEIGHT,
+                    )
+                    .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)), RoundedCornerShape(8.dp))
+                    .background(PureBlack, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ActionIcon(Icons.Filled.Delete, "Uninstall", onUninstall)
+                ActionIcon(Icons.Filled.Edit, "Rename", onRename)
+                ActionIcon(Icons.Filled.VisibilityOff, "Hide", onHide)
+                ActionIcon(Icons.Filled.Close, "Close", onCloseApp)
+            }
         }
     }
 }
