@@ -45,17 +45,17 @@ object ExpenseRepository {
 
     /**
      * Scans any inbox messages newer than the last sync and records the ones that parse as
-     * spend. The very first sync (nothing recorded yet) only looks back to the start of today
-     * rather than the device's entire SMS history, so enabling the tracker populates today's
-     * numbers immediately instead of churning through years of old messages; every sync after
-     * that is purely incremental.
+     * spend. The very first sync (nothing recorded yet) looks back to the start of the
+     * current calendar month rather than the device's entire SMS history — enough to make
+     * "this month" correct immediately, without churning through years of old messages.
+     * Every sync after that is purely incremental from wherever the last one left off.
      */
     fun syncSms(context: Context) {
         if (!hasSmsPermission(context)) return
         val db = ExpenseDbHelper(context).writableDatabase
         try {
             val hasSyncedBefore = prefs(context).contains(KEY_LAST_SYNC_TS)
-            val since = if (hasSyncedBefore) prefs(context).getLong(KEY_LAST_SYNC_TS, 0L) else startOfToday()
+            val since = if (hasSyncedBefore) prefs(context).getLong(KEY_LAST_SYNC_TS, 0L) else startOfMonth()
             var maxTimestamp = since
             val uri = Uri.parse("content://sms/inbox")
             val projection = arrayOf("_id", "body", "date")
