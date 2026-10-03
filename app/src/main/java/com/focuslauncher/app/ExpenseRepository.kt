@@ -97,6 +97,8 @@ object ExpenseRepository {
         return null
     }
 
+    fun getUntaggedCount(context: Context): Int = getUntaggedMerchants(context).size
+
     fun getUntaggedMerchants(context: Context): List<String> {
         val db = ExpenseDbHelper(context).readableDatabase
         val result = mutableListOf<String>()
@@ -132,6 +134,50 @@ object ExpenseRepository {
         cal.set(Calendar.SECOND, 0)
         cal.set(Calendar.MILLISECOND, 0)
         return cal.timeInMillis
+    }
+
+    private fun startOfMonth(): Long {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    fun getMonthTotal(context: Context): Double {
+        val db = ExpenseDbHelper(context).readableDatabase
+        try {
+            db.rawQuery(
+                "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp >= ?",
+                arrayOf(startOfMonth().toString())
+            ).use { cursor -> cursor.moveToFirst(); return cursor.getDouble(0) }
+        } finally {
+            db.close()
+        }
+    }
+
+    /** Category totals for the current calendar month so far — zero for anything untouched. */
+    fun getCategoryTotalsMonth(context: Context): Map<ExpenseCategory, Double> {
+        val db = ExpenseDbHelper(context).readableDatabase
+        try {
+            val totals = linkedMapOf<ExpenseCategory, Double>()
+            ExpenseCategory.entries.forEach { totals[it] = 0.0 }
+            db.rawQuery(
+                """SELECT category, SUM(amount) FROM transactions
+                   WHERE timestamp >= ? AND category IS NOT NULL
+                   GROUP BY category""",
+                arrayOf(startOfMonth().toString())
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    ExpenseCategory.fromStorage(cursor.getString(0))?.let { totals[it] = cursor.getDouble(1) }
+                }
+            }
+            return totals
+        } finally {
+            db.close()
+        }
     }
 
     fun getTodayTotal(context: Context): Double {

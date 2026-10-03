@@ -41,27 +41,32 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   on release.
   - Rename sets a launcher-only display name used everywhere the app appears.
   - Hide removes it from search while keeping any dial/gesture assignment working.
-- **Settings** (long-press the clock) — grouped into labeled sections (Bottom dial / Upper
-  dial / Gestures / Hidden apps), each under a thin divider. The two dial sections show a
-  small radial replica of the actual on-screen dial — the same arc, in the same corner —
-  instead of a plain list, so it's immediately obvious which pull direction launches which
-  app. Tap a node to assign/replace that slot; long-press a filled one to clear it.
-  Gesture overrides and unhiding apps are still plain rows below.
+- **Settings** (long-press the clock) — grouped into labeled sections, in order: Expense
+  tracker, Gestures, Upper dial, Bottom dial, Hidden apps, each under a thin divider. The
+  two dial sections show a small radial replica of the actual on-screen dial — the same
+  arc, in the same corner — instead of a plain list, so it's immediately obvious which pull
+  direction launches which app. Tap a node to assign/replace that slot; long-press a filled
+  one to clear it. Gesture overrides and unhiding apps are still plain rows.
 - Status bar is hidden, and system window/activity-open animations are disabled for this
   activity, so the home screen reads as the persistent OS shell rather than an app that
   keeps opening and closing on top of it.
-- **Expense tracker** (optional — enable under Settings → Expense tracker) — reads bank/UPI
-  debit alerts straight out of the SMS inbox and tracks spend locally, nothing leaves the
-  device. Enabling it for the first time pulls in today's messages only, not the device's
-  entire SMS history; every check after that is purely incremental. The dashboard
-  (Settings → Open dashboard) shows:
-  - Today's total, animating in like an odometer when a background re-sync finds new spend.
-  - Any merchant seen for the first time, with one-tap category chips (Food / Transport /
-    Essentials / Extras / Subscription) — tagging it retroactively re-tags all of its past
-    transactions too, and it's remembered for every future one.
-  - A per-category breakdown with animated proportional bars.
-  - A 14-day line graph that grows up from the baseline whenever the data changes.
-  - A list of recent transactions.
+- **Expense tracker** (optional — enable under Settings → Expense tracker, now the first
+  section) — reads bank/UPI debit alerts straight out of the SMS inbox and tracks spend
+  locally, nothing leaves the device. Enabling it for the first time pulls in today's
+  messages only, not the device's entire SMS history; every check after that is purely
+  incremental.
+  - **On the home screen itself**, below the calendar block: this month's total, a bar
+    graph of categories sorted shortest to tallest left-to-right (only categories with
+    spend so far are shown, to cut clutter), and a `>`-prefixed breakdown line per category
+    — matching the calendar block's own `>` convention. Tapping this area opens the
+    dashboard; a white badge on its `>` button shows how many merchants still need tagging.
+  - **The dashboard** (Settings → Open dashboard, or tap the home screen summary) adds:
+    today's total (animating in like an odometer when a background re-sync finds new
+    spend), any merchant seen for the first time with one-tap category chips — each
+    category shown with its own icon (fork/knife, car, cart, star, subscriptions) — a
+    per-category breakdown with animated bars, a 14-day line graph that grows up from the
+    baseline on data changes, and a list of recent transactions. Tagging a merchant
+    retroactively re-tags its past transactions and is remembered for every future one.
   - Bank SMS formats vary a lot and there's no universal standard, so parsing (in
     `SmsTransactionParser.kt`) covers common Indian bank/UPI debit phrasing — extend its
     regexes for formats it doesn't already catch.

@@ -18,15 +18,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,6 +59,15 @@ import java.util.Locale
 import kotlin.math.max
 
 private fun formatAmount(amount: Double): String = "₹${"%.0f".format(amount)}"
+
+/** Shared category→icon mapping, reused by the home screen's own monthly summary. */
+internal fun categoryIcon(category: ExpenseCategory): ImageVector = when (category) {
+    ExpenseCategory.FOOD -> Icons.Filled.Restaurant
+    ExpenseCategory.TRANSPORT -> Icons.Filled.DirectionsCar
+    ExpenseCategory.ESSENTIALS -> Icons.Filled.ShoppingCart
+    ExpenseCategory.EXTRAS -> Icons.Filled.Star
+    ExpenseCategory.SUBSCRIPTION -> Icons.Filled.Subscriptions
+}
 
 /**
  * SMS-derived spend dashboard: today's total, a per-category breakdown, a line graph of the
@@ -164,6 +184,7 @@ private fun SectionHeader(title: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MerchantTagRow(merchant: String, onTag: (ExpenseCategory) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier = modifier.padding(top = 14.dp)) {
@@ -174,17 +195,25 @@ private fun MerchantTagRow(merchant: String, onTag: (ExpenseCategory) -> Unit, m
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Row(
-            modifier = Modifier.padding(top = 6.dp),
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ExpenseCategory.entries.forEach { category ->
-                Text(
-                    text = category.label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SubtextGrey,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.clickable { onTag(category) },
-                )
+                ) {
+                    Icon(
+                        imageVector = categoryIcon(category),
+                        contentDescription = null,
+                        tint = SubtextGrey,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = category.label, style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
+                }
             }
         }
     }
@@ -200,7 +229,14 @@ private fun CategoryRow(category: ExpenseCategory, amount: Double, fraction: Flo
         label = "categoryFraction",
     )
     Column(modifier = Modifier.padding(top = 12.dp)) {
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = categoryIcon(category),
+                contentDescription = null,
+                tint = PureWhite,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(text = category.label, style = MaterialTheme.typography.bodyMedium, color = PureWhite)
             Box(modifier = Modifier.weight(1f))
             Text(text = formatAmount(amount), style = MaterialTheme.typography.bodyMedium, color = SubtextGrey)
