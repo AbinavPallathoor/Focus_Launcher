@@ -18,8 +18,15 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   highlighted so pressing Enter launches it immediately.
 - **Swipe left / right** on the home screen trigger quick actions — Camera and Contacts
   by default, both overridable.
-- **Settings** (long-press the clock) — assign apps to each radial dial's slots, and
-  override the swipe-left/right actions.
+- **Next calendar event** — shown below the date, read straight from the device's calendar
+  provider (whatever's synced from a Google account already on-device — no separate sign-in).
+- **Long-press an app** in search for a themed action menu — filled monochrome icons
+  (same pack, same size) for Uninstall, Rename, Hide, and Close.
+  - Rename sets a launcher-only display name used everywhere the app appears.
+  - Hide removes it from search while keeping any dial/gesture assignment working.
+- **Settings** (long-press the clock) — grouped into labeled sections (Bottom dial / Upper
+  dial / Gestures / Hidden apps), each under a thin divider. Assign apps to each radial
+  dial's slot, override the swipe-left/right actions, and unhide hidden apps.
 - Status bar is hidden for a fully immersive home screen.
 
 ## Project structure
@@ -27,10 +34,13 @@ gesture-driven radial dials for quick app launching, and a full-text search.
 ```
 app/src/main/java/com/focuslauncher/app/
 ├── MainActivity.kt           — navigation between Home / Search / Settings, status bar
-├── AppRepository.kt          — queries installed apps, launches apps/camera/contacts
+├── AppRepository.kt          — queries installed apps, launches/uninstalls/closes apps
+├── AppLabelStore.kt          — persists per-app rename overrides
+├── HiddenAppsStore.kt        — persists which apps are hidden from search
 ├── RadialMenuStore.kt        — persists which apps are assigned to each dial's slots
 ├── GestureAppStore.kt        — persists swipe-left/right overrides
 ├── DeviceUsage.kt            — today's screen time via UsageStatsManager
+├── CalendarRepository.kt     — next upcoming event via the device's calendar provider
 ├── PackageChangeReceiver.kt  — refreshes the app list on install/uninstall
 └── ui/
     ├── Theme.kt              — black/white/grey palette, monospace typography
@@ -38,8 +48,8 @@ app/src/main/java/com/focuslauncher/app/
     ├── HomeScreen.kt         — clock, gesture handling, hosts the two dials
     ├── RadialAppMenu.kt      — the pull-and-rotate dial menu
     ├── ScrambleText.kt       — hacker-style decrypt text animation
-    ├── SearchScreen.kt       — full-screen search overlay
-    └── SettingsScreen.kt     — dial slot and gesture configuration
+    ├── SearchScreen.kt       — full-screen search overlay + app action menu
+    └── SettingsScreen.kt     — dial slot, gesture, and hidden-app configuration
 ```
 
 ## Building
@@ -61,9 +71,17 @@ Requires Android Studio (or a local Gradle + Android SDK install). `minSdk 26`, 
 - `PACKAGE_USAGE_STATS` — for the screen-time display. This is a special permission the
   user must grant manually under Settings → Apps → Special access → Usage access; the
   launcher prompts for it (tap "Enable screen time" on the home screen).
+- `READ_CALENDAR` — for the upcoming-event display, requested at runtime (tap "Enable
+  calendar" on the home screen).
+- `KILL_BACKGROUND_PROCESSES` — for the "Close" action in an app's long-press menu.
 
 ## Known limitations
 
 - Fonts: body text uses Android's built-in monospace typeface (no network dependency).
 - Screen time requires the manual Usage Access grant described above; until granted, the
   home screen shows "Enable screen time" instead of a duration.
+- "Close" is a best-effort background-process kill (`killBackgroundProcesses`) — Android
+  doesn't let one app force-stop another's foreground activity, so this mainly helps with
+  apps already in the background.
+- The calendar event comes from whatever's already synced to the device's local calendar
+  provider; there's no in-app Google account sign-in.

@@ -1,7 +1,10 @@
 package com.focuslauncher.app.ui
 
+import android.Manifest
 import android.graphics.Rect
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -35,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.focuslauncher.app.AppInfo
+import com.focuslauncher.app.CalendarRepository
 import com.focuslauncher.app.DeviceUsage
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -71,10 +75,19 @@ fun HomeScreen(
 
     var hasUsageAccess by remember { mutableStateOf(DeviceUsage.hasUsageAccess(context)) }
     var screenTimeMillis by remember { mutableStateOf(DeviceUsage.todayScreenTimeMillis(context)) }
+
+    var hasCalendarPermission by remember { mutableStateOf(CalendarRepository.hasPermission(context)) }
+    var nextEvent by remember { mutableStateOf<CalendarRepository.UpcomingEvent?>(null) }
+    val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasCalendarPermission = granted }
+
     LaunchedEffect(Unit) {
         while (true) {
             hasUsageAccess = DeviceUsage.hasUsageAccess(context)
             if (hasUsageAccess) screenTimeMillis = DeviceUsage.todayScreenTimeMillis(context)
+            hasCalendarPermission = CalendarRepository.hasPermission(context)
+            if (hasCalendarPermission) nextEvent = CalendarRepository.getNextEvent(context)
             delay(SCREEN_TIME_POLL_MS)
         }
     }
@@ -166,6 +179,20 @@ fun HomeScreen(
                         }
                     )
                 }
+                Text(
+                    text = when {
+                        !hasCalendarPermission -> "Enable calendar"
+                        nextEvent != null -> CalendarRepository.formatEvent(nextEvent!!)
+                        else -> "No upcoming events"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .align(Alignment.Start)
+                        .padding(top = 10.dp)
+                        .clickable(enabled = !hasCalendarPermission) {
+                            calendarPermissionLauncher.launch(Manifest.permission.READ_CALENDAR)
+                        }
+                )
             }
         }
 

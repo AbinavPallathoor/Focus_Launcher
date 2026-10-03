@@ -1,22 +1,38 @@
 package com.focuslauncher.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,13 +44,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.focuslauncher.app.AppInfo
 import kotlinx.coroutines.delay
 
@@ -156,39 +176,32 @@ fun SearchScreen(
                             )
                             .padding(horizontal = 8.dp, vertical = 10.dp)
                     )
-                    DropdownMenu(
-                        expanded = contextMenuAppKey == app.key,
-                        onDismissRequest = { contextMenuAppKey = null },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Uninstall") },
-                            onClick = {
-                                contextMenuAppKey = null
-                                onUninstallApp(app)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Rename") },
-                            onClick = {
-                                contextMenuAppKey = null
-                                renameText = app.label
-                                renamingApp = app
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Hide") },
-                            onClick = {
-                                contextMenuAppKey = null
-                                onHideApp(app)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Close") },
-                            onClick = {
-                                contextMenuAppKey = null
-                                onCloseApp(app)
-                            }
-                        )
+                    if (contextMenuAppKey == app.key) {
+                        Popup(
+                            alignment = Alignment.TopStart,
+                            onDismissRequest = { contextMenuAppKey = null },
+                            properties = PopupProperties(focusable = true),
+                        ) {
+                            AppActionMenu(
+                                onUninstall = {
+                                    contextMenuAppKey = null
+                                    onUninstallApp(app)
+                                },
+                                onRename = {
+                                    contextMenuAppKey = null
+                                    renameText = app.label
+                                    renamingApp = app
+                                },
+                                onHide = {
+                                    contextMenuAppKey = null
+                                    onHideApp(app)
+                                },
+                                onCloseApp = {
+                                    contextMenuAppKey = null
+                                    onCloseApp(app)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -233,4 +246,45 @@ fun SearchScreen(
             },
         )
     }
+}
+
+/** The long-press action row — same icon pack, same size, filled monochrome, pops in. */
+@Composable
+private fun AppActionMenu(
+    onUninstall: () -> Unit,
+    onRename: () -> Unit,
+    onHide: () -> Unit,
+    onCloseApp: () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = true,
+        enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.85f),
+        exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.85f),
+    ) {
+        Row(
+            modifier = Modifier
+                .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)), RoundedCornerShape(8.dp))
+                .background(PureBlack, RoundedCornerShape(8.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ActionIcon(Icons.Filled.Delete, "Uninstall", onUninstall)
+            ActionIcon(Icons.Filled.Edit, "Rename", onRename)
+            ActionIcon(Icons.Filled.VisibilityOff, "Hide", onHide)
+            ActionIcon(Icons.Filled.Close, "Close", onCloseApp)
+        }
+    }
+}
+
+@Composable
+private fun ActionIcon(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+    Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = PureWhite,
+        modifier = Modifier
+            .size(24.dp)
+            .clickable(onClick = onClick)
+    )
 }
