@@ -68,7 +68,12 @@ private sealed class Screen {
 @Composable
 private fun LauncherRoot() {
     val context = LocalContext.current
-    var apps by remember { mutableStateOf(AppRepository.getInstalledApps(context)) }
+    // allApps is unfiltered (label overrides applied) so dial/gesture assignments keep
+    // resolving even if the app gets hidden later; visibleApps/hiddenAppsList derive from it.
+    var allApps by remember { mutableStateOf(AppRepository.getInstalledApps(context)) }
+    var hiddenKeys by remember { mutableStateOf(HiddenAppsStore.getHiddenKeys(context)) }
+    val visibleApps = remember(allApps, hiddenKeys) { allApps.filter { it.key !in hiddenKeys } }
+    val hiddenAppsList = remember(allApps, hiddenKeys) { allApps.filter { it.key in hiddenKeys } }
     var radialGroups by remember {
         mutableStateOf(RADIAL_GROUPS.associateWith { group -> RadialMenuStore.getSlotKeys(context, group) })
     }
@@ -82,6 +87,14 @@ private fun LauncherRoot() {
     }
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
 
+    fun refreshApps() {
+        allApps = AppRepository.getInstalledApps(context)
+    }
+
+    fun refreshHidden() {
+        hiddenKeys = HiddenAppsStore.getHiddenKeys(context)
+    }
+
     fun refreshRadialGroups() {
         radialGroups = RADIAL_GROUPS.associateWith { group -> RadialMenuStore.getSlotKeys(context, group) }
     }
@@ -94,16 +107,16 @@ private fun LauncherRoot() {
     }
 
     fun resolveGroupApps(group: Int): List<AppInfo> =
-        radialGroups[group].orEmpty().mapNotNull { key -> key?.let { AppRepository.findByKey(apps, it) } }
+        radialGroups[group].orEmpty().mapNotNull { key -> key?.let { AppRepository.findByKey(allApps, it) } }
 
     fun resolveGestureApp(gesture: SwipeGesture): AppInfo? =
-        gestureApps[gesture]?.let { key -> AppRepository.findByKey(apps, key) }
+        gestureApps[gesture]?.let { key -> AppRepository.findByKey(allApps, key) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                apps = AppRepository.getInstalledApps(context)
+                refreshApps()
                 refreshRadialGroups()
                 refreshGestureApps()
                 screen = Screen.Home
@@ -115,7 +128,7 @@ private fun LauncherRoot() {
 
     DisposableEffect(Unit) {
         val receiver = PackageChangeReceiver.register(context) {
-            apps = AppRepository.getInstalledApps(context)
+            refreshApps()
         }
         onDispose { context.unregisterReceiver(receiver) }
     }
@@ -156,7 +169,7 @@ private fun LauncherRoot() {
             is Screen.Settings -> {
                 SettingsScreen(
                     resolveSlot = { group, index ->
-                        radialGroups[group]?.getOrNull(index)?.let { key -> AppRepository.findByKey(apps, key) }
+                        radialGroups[group]?.getOrNull(index)?.let { key -> AppRepository.findByKey(allApps, key) }
                     },
                     onPickSlot = { group, index ->
                         screen = Screen.Search(
@@ -185,15 +198,30 @@ private fun LauncherRoot() {
                         GestureAppStore.setAppKey(context, gesture, null)
                         refreshGestureApps()
                     },
+                    hiddenApps = hiddenAppsList,
+                    onUnhideApp = { app ->
+                        HiddenAppsStore.setHidden(context, app.key, false)
+                        refreshHidden()
+                    },
                     onClose = { screen = Screen.Home },
                 )
             }
             is Screen.Search -> {
                 SearchScreen(
-                    apps = apps,
+                    apps = visibleApps,
                     onLaunch = { AppRepository.launchApp(context, it) },
                     onClose = { screen = currentScreen.returnTo },
                     onPick = currentScreen.onPicked,
+                    onUninstallApp = { app -> AppRepository.requestUninstall(context, app) },
+                    onRenameApp = { app, newLabel ->
+                        AppLabelStore.setCustomLabel(context, app.key, newLabel)
+                        refreshApps()
+                    },
+                    onHideApp = { app ->
+                        HiddenAppsStore.setHidden(context, app.key, true)
+                        refreshHidden()
+                    },
+                    onCloseApp = { app -> AppRepository.closeApp(context, app) },
                 )
             }
         }
