@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -58,23 +57,14 @@ object CalendarRepository {
         }
     }
 
-    fun formatEvent(event: UpcomingEvent): String {
-        val calendar = Calendar.getInstance()
-        val today = calendar.get(Calendar.DAY_OF_YEAR) to calendar.get(Calendar.YEAR)
-        calendar.timeInMillis = event.startMillis
-        val eventDay = calendar.get(Calendar.DAY_OF_YEAR) to calendar.get(Calendar.YEAR)
+    /** "Oct 5" — short enough to sit on its own line without wrapping or truncating. */
+    fun formatDate(event: UpcomingEvent): String =
+        SimpleDateFormat("MMM d", Locale.getDefault()).format(event.startMillis)
 
+    /** "3:00 PM – 4:00 PM", or "All day" for an all-day event. */
+    fun formatTimeRange(event: UpcomingEvent): String {
+        if (event.allDay) return "All day"
         val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
-        val whenText = when {
-            event.allDay -> "Today"
-            eventDay == today ->
-                "${timeFormat.format(event.startMillis)} – ${timeFormat.format(event.endMillis)}"
-            else -> {
-                val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
-                "${dateFormat.format(event.startMillis)}, " +
-                    "${timeFormat.format(event.startMillis)} – ${timeFormat.format(event.endMillis)}"
-            }
-        }
-        return "${event.title} · $whenText"
+        return "${timeFormat.format(event.startMillis)} – ${timeFormat.format(event.endMillis)}"
     }
 }

@@ -7,7 +7,10 @@ gesture-driven radial dials for quick app launching, and a full-text search.
 ## Features
 
 - **Dot-matrix clock** — a 5×3 segmented-display clock (`HH:mm`), with the date
-  (`DD/MM/YY`) and today's screen time flanking it at the bottom-left/right.
+  (`DD/MM/YY`) and today's screen time flanking it at the bottom-left/right. Everything
+  below the clock — that row and the calendar block — is pinned to the clock's own
+  measured width, so long text truncates with an ellipsis instead of stretching the block
+  wider than the clock.
 - **Two radial dial menus**, stacked in the bottom-right corner:
   - Pull from either handle and rotate through the arc to light up an app; the selected
     app's name glides into a left-side callout box as you rotate. Release to launch.
@@ -25,7 +28,8 @@ gesture-driven radial dials for quick app launching, and a full-text search.
 - **Swipe left / right** on the home screen trigger quick actions — Camera and Contacts
   by default, both overridable. **Swipe down** pulls down the system notification shade,
   same as it would from any other app.
-- **Next calendar event** — shown below the date with its start and end time, read
+- **Next calendar event** — shown below the date as three short lines (title, truncated
+  with an ellipsis if it's long; `> `-prefixed date; `> `-prefixed start–end time), read
   straight from the device's calendar provider (whatever's synced from a Google account
   already on-device — no separate sign-in).
 - **Long-press an app** in search to reveal an inline action panel — filled monochrome

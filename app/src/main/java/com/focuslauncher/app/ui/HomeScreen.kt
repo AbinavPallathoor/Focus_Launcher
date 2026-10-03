@@ -13,10 +13,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
@@ -33,7 +31,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.focuslauncher.app.AppInfo
 import com.focuslauncher.app.CalendarRepository
@@ -152,10 +152,15 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Everything below the clock is pinned to the clock's own measured width, so a
+            // long calendar title truncates with an ellipsis instead of stretching the whole
+            // block wider than the clock itself.
+            var clockWidthPx by remember { mutableStateOf(0) }
+            val clockWidth = with(LocalDensity.current) { clockWidthPx.toDp() }
+
             Column(
                 modifier = Modifier
                     .padding(top = 72.dp)
-                    .width(IntrinsicSize.Max)
                     .combinedClickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -164,10 +169,15 @@ fun HomeScreen(
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                DotMatrixClock(time = time)
+                DotMatrixClock(
+                    time = time,
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        clockWidthPx = coordinates.size.width
+                    }
+                )
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .width(clockWidth)
                         .padding(top = 18.dp),
                 ) {
                     Text(
@@ -182,25 +192,59 @@ fun HomeScreen(
                             "Enable screen time"
                         },
                         style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable(enabled = !hasUsageAccess) {
                             DeviceUsage.openUsageAccessSettings(context)
                         }
                     )
                 }
-                Text(
-                    text = when {
-                        !hasCalendarPermission -> "Enable calendar"
-                        nextEvent != null -> CalendarRepository.formatEvent(nextEvent!!)
-                        else -> "No upcoming events"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
+
+                val event = nextEvent
+                Column(
                     modifier = Modifier
-                        .align(Alignment.Start)
+                        .width(clockWidth)
                         .padding(top = 10.dp)
                         .clickable(enabled = !hasCalendarPermission) {
                             calendarPermissionLauncher.launch(Manifest.permission.READ_CALENDAR)
                         }
-                )
+                ) {
+                    when {
+                        !hasCalendarPermission -> Text(
+                            text = "Enable calendar",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        event != null -> {
+                            Text(
+                                text = event.title,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = PureWhite,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "> ${CalendarRepository.formatDate(event)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "> ${CalendarRepository.formatTimeRange(event)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        else -> Text(
+                            text = "No upcoming events",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
 
