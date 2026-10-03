@@ -20,11 +20,13 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   by default, both overridable.
 - **Next calendar event** — shown below the date, read straight from the device's calendar
   provider (whatever's synced from a Google account already on-device — no separate sign-in).
-- **Long-press an app** in search for a themed action menu — filled monochrome icons
-  (same pack, same size) for Uninstall, Rename, Hide, and Close. It pops in with the same
-  elbow-leader-line language as the radial dial's callout (a 45° diagonal off the row, then
-  a bend to horizontal) and always lands on the right edge of the screen, clear of the app
-  name, regardless of device width.
+- **Long-press an app** in search to reveal an inline action panel — filled monochrome
+  icons (same pack, same size) for Uninstall, Rename, Hide, and Close, sliding in from the
+  right edge of that same row (no separate popup), separated from the app name by a thin
+  divider. A long name is simply covered by the panel's own opaque background rather than
+  being clipped right at the divider. While held, the row's border fills in white (or black
+  on the highlighted top match) proportional to how long you've been pressing, fading out
+  on release.
   - Rename sets a launcher-only display name used everywhere the app appears.
   - Hide removes it from search while keeping any dial/gesture assignment working.
 - **Settings** (long-press the clock) — grouped into labeled sections (Bottom dial / Upper

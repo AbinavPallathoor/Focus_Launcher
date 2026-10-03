@@ -2,34 +2,31 @@ package com.focuslauncher.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -54,19 +51,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import com.focuslauncher.app.AppInfo
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.Animatable
 
 private const val AUTO_LAUNCH_DEBOUNCE_MS = 250L
 
@@ -122,6 +118,7 @@ fun SearchScreen(
     // Auto-launch once typing narrows to exactly one match (debounced so fast typists
     // aren't interrupted mid-word). Only applies in normal launch mode.
     LaunchedEffect(query) {
+        contextMenuAppKey = null
         if (onPick == null && query.isNotBlank()) {
             delay(AUTO_LAUNCH_DEBOUNCE_MS)
             val matches = filterApps(apps, query)
@@ -172,48 +169,32 @@ fun SearchScreen(
         LazyColumn(modifier = Modifier.padding(top = 24.dp)) {
             itemsIndexed(filtered, key = { _, app -> app.key }) { index, app ->
                 val isTopMatch = index == 0
-                Box(modifier = Modifier.fillMaxWidth().animateItemPlacement(tween(220))) {
-                    Text(
-                        text = app.label,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (isTopMatch) PureBlack else PureWhite,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isTopMatch) PureWhite else Color.Transparent)
-                            .combinedClickable(
-                                onClick = { select(app) },
-                                onLongClick = { contextMenuAppKey = app.key },
-                            )
-                            .padding(horizontal = 8.dp, vertical = 10.dp)
-                    )
-                    if (contextMenuAppKey == app.key) {
-                        Popup(
-                            alignment = Alignment.TopStart,
-                            onDismissRequest = { contextMenuAppKey = null },
-                            properties = PopupProperties(focusable = true),
-                        ) {
-                            AppActionMenu(
-                                onUninstall = {
-                                    contextMenuAppKey = null
-                                    onUninstallApp(app)
-                                },
-                                onRename = {
-                                    contextMenuAppKey = null
-                                    renameText = app.label
-                                    renamingApp = app
-                                },
-                                onHide = {
-                                    contextMenuAppKey = null
-                                    onHideApp(app)
-                                },
-                                onCloseApp = {
-                                    contextMenuAppKey = null
-                                    onCloseApp(app)
-                                },
-                            )
-                        }
-                    }
-                }
+                AppRow(
+                    app = app,
+                    isTopMatch = isTopMatch,
+                    isMenuOpen = contextMenuAppKey == app.key,
+                    modifier = Modifier.animateItemPlacement(tween(220)),
+                    onSelect = { select(app) },
+                    onLongPress = { contextMenuAppKey = app.key },
+                    onDismissMenu = { contextMenuAppKey = null },
+                    onUninstall = {
+                        contextMenuAppKey = null
+                        onUninstallApp(app)
+                    },
+                    onRename = {
+                        contextMenuAppKey = null
+                        renameText = app.label
+                        renamingApp = app
+                    },
+                    onHide = {
+                        contextMenuAppKey = null
+                        onHideApp(app)
+                    },
+                    onCloseApp = {
+                        contextMenuAppKey = null
+                        onCloseApp(app)
+                    },
+                )
             }
         }
     }
@@ -258,83 +239,110 @@ fun SearchScreen(
     }
 }
 
-// Matches the row's own vertical.padding(10dp)*2 + bodyLarge line height — the elbow
-// starts below this so the box never sits over the app name itself.
-private val MENU_ROW_HEIGHT = 54.dp
-private val MENU_DIAGONAL = 26.dp
-private val MENU_START_INSET = 8.dp
-private val MENU_BOX_HALF_HEIGHT = 26.dp
-private val MENU_BOX_WIDTH = 196.dp // ~4 icons + spacing + padding + border
-private val MENU_RIGHT_MARGIN = 16.dp
-// Matches SearchScreen's own horizontal padding, so the computed offset lands the box
-// flush with the screen's right edge regardless of device width.
-private val SEARCH_SCREEN_SIDE_PADDING = 24.dp
+private const val HOLD_BORDER_RISE_MS = 500
+private const val HOLD_BORDER_FADE_MS = 180
+private val ICON_PANEL_START_MARGIN = 22.dp // opaque buffer so text never cuts off right at the line
+private val ICON_PANEL_END_PADDING = 12.dp
+private val ICON_GAP = 18.dp
+private val DIVIDER_GAP = 14.dp
 
 /**
- * The long-press action menu — same elbow-leader-line language as the radial dial's
- * callout: a 45° diagonal off the row, then a bend to horizontal, into a box of filled
- * monochrome icons (same pack, same size). Anchored below the row so it never covers
- * the app name above it, and lands on the right edge of the screen on any device.
+ * One search result row. Selected (top-match) rows are white-on-black inverted; all rows
+ * get an animated white/black border (matching contrast) that fills in while held down and
+ * fades on release. Long-pressing reveals an icon action panel inline on the right — text
+ * behind it is left unclipped and simply covered by the panel's own opaque background, with
+ * a margin before the dividing line so nothing is cut off right at the line.
  */
 @Composable
-private fun AppActionMenu(
+private fun AppRow(
+    app: AppInfo,
+    isTopMatch: Boolean,
+    isMenuOpen: Boolean,
+    modifier: Modifier = Modifier,
+    onSelect: () -> Unit,
+    onLongPress: () -> Unit,
+    onDismissMenu: () -> Unit,
     onUninstall: () -> Unit,
     onRename: () -> Unit,
     onHide: () -> Unit,
     onCloseApp: () -> Unit,
 ) {
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val horizontalRun = screenWidth - SEARCH_SCREEN_SIDE_PADDING - MENU_BOX_WIDTH -
-        MENU_RIGHT_MARGIN - MENU_START_INSET - MENU_DIAGONAL
+    val backgroundColor = if (isTopMatch) PureWhite else PureBlack
+    val contentColor = if (isTopMatch) PureBlack else PureWhite
+    val holdProgress = remember { Animatable(0f) }
 
-    AnimatedVisibility(
-        visible = true,
-        enter = fadeIn(tween(220)) + scaleIn(
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = 380f),
-            initialScale = 0.4f,
-            transformOrigin = TransformOrigin(0f, 0.5f),
-        ),
-        exit = fadeOut(tween(120)) + scaleOut(
-            tween(120),
-            targetScale = 0.4f,
-            transformOrigin = TransformOrigin(0f, 0.5f),
-        ),
-    ) {
-        Box(modifier = Modifier.width(screenWidth).height(140.dp)) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val anchor = Offset(MENU_START_INSET.toPx(), MENU_ROW_HEIGHT.toPx())
-                val corner = Offset(anchor.x + MENU_DIAGONAL.toPx(), anchor.y + MENU_DIAGONAL.toPx())
-                val boxAnchor = Offset(corner.x + horizontalRun.toPx(), corner.y)
-                drawLine(PureWhite, anchor, corner, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
-                drawLine(PureWhite, corner, boxAnchor, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(backgroundColor)
+            .border(BorderStroke(1.5.dp, contentColor.copy(alpha = holdProgress.value)))
+            .pointerInput(app.key) {
+                detectTapGestures(
+                    onPress = {
+                        coroutineScope {
+                            val riseJob = launch {
+                                holdProgress.snapTo(0f)
+                                holdProgress.animateTo(1f, tween(HOLD_BORDER_RISE_MS, easing = LinearEasing))
+                            }
+                            tryAwaitRelease()
+                            riseJob.cancel()
+                            launch { holdProgress.animateTo(0f, tween(HOLD_BORDER_FADE_MS)) }
+                        }
+                    },
+                    onTap = { if (isMenuOpen) onDismissMenu() else onSelect() },
+                    onLongPress = { onLongPress() },
+                )
             }
+    ) {
+        Text(
+            text = app.label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp)
+        )
+
+        AnimatedVisibility(
+            visible = isMenuOpen,
+            enter = fadeIn(tween(200)) + slideInHorizontally(tween(220)) { fullWidth -> fullWidth },
+            exit = fadeOut(tween(150)) + slideOutHorizontally(tween(180)) { fullWidth -> fullWidth },
+            modifier = Modifier.align(Alignment.CenterEnd),
+        ) {
             Row(
                 modifier = Modifier
-                    .offset(
-                        x = MENU_START_INSET + MENU_DIAGONAL + horizontalRun,
-                        y = MENU_ROW_HEIGHT + MENU_DIAGONAL - MENU_BOX_HALF_HEIGHT,
-                    )
-                    .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)), RoundedCornerShape(8.dp))
-                    .background(PureBlack, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                    .background(backgroundColor)
+                    .padding(vertical = 10.dp)
+                    .padding(end = ICON_PANEL_END_PADDING),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ActionIcon(Icons.Filled.Delete, "Uninstall", onUninstall)
-                ActionIcon(Icons.Filled.Edit, "Rename", onRename)
-                ActionIcon(Icons.Filled.VisibilityOff, "Hide", onHide)
-                ActionIcon(Icons.Filled.Close, "Close", onCloseApp)
+                Spacer(modifier = Modifier.width(ICON_PANEL_START_MARGIN))
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(22.dp)
+                        .background(contentColor.copy(alpha = 0.4f))
+                )
+                Spacer(modifier = Modifier.width(DIVIDER_GAP))
+                Row(horizontalArrangement = Arrangement.spacedBy(ICON_GAP), verticalAlignment = Alignment.CenterVertically) {
+                    ActionIcon(Icons.Filled.Delete, "Uninstall", contentColor, onUninstall)
+                    ActionIcon(Icons.Filled.Edit, "Rename", contentColor, onRename)
+                    ActionIcon(Icons.Filled.VisibilityOff, "Hide", contentColor, onHide)
+                    ActionIcon(Icons.Filled.Close, "Close", contentColor, onCloseApp)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun ActionIcon(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+private fun ActionIcon(icon: ImageVector, contentDescription: String, tint: Color, onClick: () -> Unit) {
     Icon(
         imageVector = icon,
         contentDescription = contentDescription,
-        tint = PureWhite,
+        tint = tint,
         modifier = Modifier
             .size(24.dp)
             .clickable(onClick = onClick)
