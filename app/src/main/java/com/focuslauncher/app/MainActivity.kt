@@ -102,6 +102,7 @@ private fun LauncherRoot() {
     var expenseRefreshTick by remember { mutableStateOf(0) }
     // Cheap no-op queries against empty tables when the tracker is off, so it's simpler to
     // always compute these than to thread an enabled check through every call site.
+    val todayExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
     val monthlyExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getMonthTotal(context) }
     val categoryTotalsMonth = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
     val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUntaggedCount(context) }
@@ -201,6 +202,7 @@ private fun LauncherRoot() {
                     },
                     onSwipeDown = { AppRepository.expandNotifications(context) },
                     expenseTrackerEnabled = expenseTrackerEnabled,
+                    todayExpenseTotal = todayExpenseTotal,
                     monthlyExpenseTotal = monthlyExpenseTotal,
                     categoryTotalsMonth = categoryTotalsMonth,
                     untaggedExpenseCount = untaggedExpenseCount,

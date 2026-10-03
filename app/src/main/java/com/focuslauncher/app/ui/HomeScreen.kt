@@ -86,6 +86,7 @@ fun HomeScreen(
     onSwipeRight: () -> Unit,
     onSwipeDown: () -> Unit,
     expenseTrackerEnabled: Boolean,
+    todayExpenseTotal: Double,
     monthlyExpenseTotal: Double,
     categoryTotalsMonth: Map<ExpenseCategory, Double>,
     untaggedExpenseCount: Int,
@@ -274,6 +275,7 @@ fun HomeScreen(
 
                 if (expenseTrackerEnabled) {
                     ExpenseSummary(
+                        todayTotal = todayExpenseTotal,
                         monthTotal = monthlyExpenseTotal,
                         categoryTotals = categoryTotalsMonth,
                         untaggedCount = untaggedExpenseCount,
@@ -314,6 +316,7 @@ private val DASHBOARD_BADGE_SIZE = 18.dp
  */
 @Composable
 private fun ExpenseSummary(
+    todayTotal: Double,
     monthTotal: Double,
     categoryTotals: Map<ExpenseCategory, Double>,
     untaggedCount: Int,
@@ -327,7 +330,7 @@ private fun ExpenseSummary(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenDashboard),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = "THIS MONTH", style = MaterialTheme.typography.bodySmall, color = SubtextGrey, letterSpacing = 1.sp)
@@ -341,6 +344,21 @@ private fun ExpenseSummary(
                     label = "monthTotal",
                 ) { total ->
                     Text(text = formatExpenseAmount(total), style = MaterialTheme.typography.headlineMedium, color = PureWhite)
+                }
+                AnimatedContent(
+                    targetState = todayTotal,
+                    transitionSpec = {
+                        (slideInVertically(tween(260)) { height -> height } + fadeIn(tween(260))) togetherWith
+                            (slideOutVertically(tween(260)) { height -> -height } + fadeOut(tween(260)))
+                    },
+                    label = "todayTotal",
+                    modifier = Modifier.padding(top = 2.dp),
+                ) { total ->
+                    Text(
+                        text = "Today  ${formatExpenseAmount(total)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SubtextGrey,
+                    )
                 }
             }
             DashboardButton(untaggedCount = untaggedCount)
