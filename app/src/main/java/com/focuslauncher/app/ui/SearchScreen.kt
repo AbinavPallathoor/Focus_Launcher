@@ -2,6 +2,8 @@ package com.focuslauncher.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -55,7 +57,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -258,15 +262,19 @@ fun SearchScreen(
 // starts below this so the box never sits over the app name itself.
 private val MENU_ROW_HEIGHT = 54.dp
 private val MENU_DIAGONAL = 26.dp
-private val MENU_HORIZONTAL = 32.dp
 private val MENU_START_INSET = 8.dp
 private val MENU_BOX_HALF_HEIGHT = 26.dp
+private val MENU_BOX_WIDTH = 196.dp // ~4 icons + spacing + padding + border
+private val MENU_RIGHT_MARGIN = 16.dp
+// Matches SearchScreen's own horizontal padding, so the computed offset lands the box
+// flush with the screen's right edge regardless of device width.
+private val SEARCH_SCREEN_SIDE_PADDING = 24.dp
 
 /**
  * The long-press action menu — same elbow-leader-line language as the radial dial's
  * callout: a 45° diagonal off the row, then a bend to horizontal, into a box of filled
  * monochrome icons (same pack, same size). Anchored below the row so it never covers
- * the app name above it.
+ * the app name above it, and lands on the right edge of the screen on any device.
  */
 @Composable
 private fun AppActionMenu(
@@ -275,23 +283,35 @@ private fun AppActionMenu(
     onHide: () -> Unit,
     onCloseApp: () -> Unit,
 ) {
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val horizontalRun = screenWidth - SEARCH_SCREEN_SIDE_PADDING - MENU_BOX_WIDTH -
+        MENU_RIGHT_MARGIN - MENU_START_INSET - MENU_DIAGONAL
+
     AnimatedVisibility(
         visible = true,
-        enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.85f),
-        exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.85f),
+        enter = fadeIn(tween(220)) + scaleIn(
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = 380f),
+            initialScale = 0.4f,
+            transformOrigin = TransformOrigin(0f, 0.5f),
+        ),
+        exit = fadeOut(tween(120)) + scaleOut(
+            tween(120),
+            targetScale = 0.4f,
+            transformOrigin = TransformOrigin(0f, 0.5f),
+        ),
     ) {
-        Box(modifier = Modifier.width(300.dp).height(140.dp)) {
+        Box(modifier = Modifier.width(screenWidth).height(140.dp)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val anchor = Offset(MENU_START_INSET.toPx(), MENU_ROW_HEIGHT.toPx())
                 val corner = Offset(anchor.x + MENU_DIAGONAL.toPx(), anchor.y + MENU_DIAGONAL.toPx())
-                val boxAnchor = Offset(corner.x + MENU_HORIZONTAL.toPx(), corner.y)
+                val boxAnchor = Offset(corner.x + horizontalRun.toPx(), corner.y)
                 drawLine(PureWhite, anchor, corner, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
                 drawLine(PureWhite, corner, boxAnchor, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
             }
             Row(
                 modifier = Modifier
                     .offset(
-                        x = MENU_START_INSET + MENU_DIAGONAL + MENU_HORIZONTAL,
+                        x = MENU_START_INSET + MENU_DIAGONAL + horizontalRun,
                         y = MENU_ROW_HEIGHT + MENU_DIAGONAL - MENU_BOX_HALF_HEIGHT,
                     )
                     .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)), RoundedCornerShape(8.dp))
