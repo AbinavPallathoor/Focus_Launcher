@@ -5,18 +5,36 @@ import android.graphics.Rect
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,14 +53,17 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.AppInfo
 import com.focuslauncher.app.CalendarRepository
 import com.focuslauncher.app.DeviceUsage
+import com.focuslauncher.app.ExpenseCategory
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.max
 
 private const val SWIPE_UP_OPEN_THRESHOLD_PX = -60f
 private const val SWIPE_DOWN_OPEN_THRESHOLD_PX = 60f
@@ -64,6 +85,11 @@ fun HomeScreen(
     onSwipeLeft: () -> Unit,
     onSwipeRight: () -> Unit,
     onSwipeDown: () -> Unit,
+    expenseTrackerEnabled: Boolean,
+    monthlyExpenseTotal: Double,
+    categoryTotalsMonth: Map<ExpenseCategory, Double>,
+    untaggedExpenseCount: Int,
+    onOpenExpenseTracker: () -> Unit,
 ) {
     val context = LocalContext.current
     val time = rememberCurrentTime()
@@ -245,6 +271,18 @@ fun HomeScreen(
                         )
                     }
                 }
+
+                if (expenseTrackerEnabled) {
+                    ExpenseSummary(
+                        monthTotal = monthlyExpenseTotal,
+                        categoryTotals = categoryTotalsMonth,
+                        untaggedCount = untaggedExpenseCount,
+                        onOpenDashboard = onOpenExpenseTracker,
+                        modifier = Modifier
+                            .width(clockWidth)
+                            .padding(top = 18.dp),
+                    )
+                }
             }
         }
 
@@ -261,5 +299,129 @@ fun HomeScreen(
             onLaunch = onLaunch,
             modifier = Modifier.align(Alignment.BottomEnd),
         )
+    }
+}
+
+private fun formatExpenseAmount(amount: Double): String = "₹${"%.0f".format(amount)}"
+
+private val BAR_GRAPH_HEIGHT = 56.dp
+private val DASHBOARD_BADGE_SIZE = 18.dp
+
+/**
+ * This month's spend at a glance: total, a bar per category (shortest to tallest, left to
+ * right) and a `>`-prefixed breakdown line per category — matching the calendar block's own
+ * `>` convention above. Categories with nothing spent yet are omitted to reduce clutter.
+ */
+@Composable
+private fun ExpenseSummary(
+    monthTotal: Double,
+    categoryTotals: Map<ExpenseCategory, Double>,
+    untaggedCount: Int,
+    onOpenDashboard: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val nonZero = remember(categoryTotals) { categoryTotals.filter { it.value > 0.0 } }
+
+    Column(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenDashboard),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "THIS MONTH", style = MaterialTheme.typography.bodySmall, color = SubtextGrey, letterSpacing = 1.sp)
+                // Rolls like an odometer when a background re-sync finds new spend.
+                AnimatedContent(
+                    targetState = monthTotal,
+                    transitionSpec = {
+                        (slideInVertically(tween(260)) { height -> height } + fadeIn(tween(260))) togetherWith
+                            (slideOutVertically(tween(260)) { height -> -height } + fadeOut(tween(260)))
+                    },
+                    label = "monthTotal",
+                ) { total ->
+                    Text(text = formatExpenseAmount(total), style = MaterialTheme.typography.headlineMedium, color = PureWhite)
+                }
+            }
+            DashboardButton(untaggedCount = untaggedCount)
+        }
+
+        if (nonZero.isNotEmpty()) {
+            MonthlyBarGraph(
+                categoryTotals = nonZero,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(BAR_GRAPH_HEIGHT)
+                    .padding(top = 12.dp),
+            )
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                nonZero.entries.sortedByDescending { it.value }.forEach { (category, amount) ->
+                    Text(
+                        text = "> ${category.label}  ${formatExpenseAmount(amount)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Bars sorted shortest to tallest, left to right, each growing up from the baseline. */
+@Composable
+private fun MonthlyBarGraph(categoryTotals: Map<ExpenseCategory, Double>, modifier: Modifier = Modifier) {
+    val ascending = remember(categoryTotals) { categoryTotals.entries.sortedBy { it.value } }
+    val maxValue = max(ascending.maxOfOrNull { it.value } ?: 0.0, 1.0)
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        ascending.forEach { (_, amount) ->
+            val targetFraction = (amount / maxValue).toFloat().coerceIn(0.06f, 1f)
+            val animatedFraction by animateFloatAsState(
+                targetValue = targetFraction,
+                animationSpec = tween(500, easing = FastOutSlowInEasing),
+                label = "barFraction",
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(animatedFraction)
+                    .background(PureWhite)
+            )
+        }
+    }
+}
+
+/** Opens the expense dashboard; a white badge (matching the app's inverted-highlight motif
+ * elsewhere) surfaces how many merchants are still waiting to be tagged. */
+@Composable
+private fun DashboardButton(untaggedCount: Int, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.TopEnd) {
+        Box(
+            modifier = Modifier
+                .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = 0.5f)))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(text = ">", style = MaterialTheme.typography.bodyLarge, color = PureWhite)
+        }
+        if (untaggedCount > 0) {
+            Box(
+                modifier = Modifier
+                    .offset(x = 6.dp, y = (-6).dp)
+                    .size(DASHBOARD_BADGE_SIZE)
+                    .background(PureWhite, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = untaggedCount.toString(),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                    color = PureBlack,
+                )
+            }
+        }
     }
 }

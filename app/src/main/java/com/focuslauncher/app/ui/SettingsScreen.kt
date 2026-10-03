@@ -72,29 +72,16 @@ fun SettingsScreen(
         Text(text = "Settings", style = MaterialTheme.typography.bodyLarge, color = PureWhite)
 
         LazyColumn(modifier = Modifier.padding(top = 12.dp)) {
-            item { SectionHeader("Bottom dial") }
+            item { SectionHeader("Expense tracker") }
             item {
-                RadialDialPreview(
-                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_BOTTOM, index) },
-                    startAngleDeg = 0f,
-                    sweepDeg = 90f,
-                    anchoredAtCenter = false,
-                    boxHeight = 200.dp,
-                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_BOTTOM, index) },
-                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_BOTTOM, index) },
+                ToggleRow(
+                    label = "Track SMS expenses",
+                    value = expenseTrackerEnabled,
+                    onToggle = onToggleExpenseTracker,
                 )
             }
-            item { SectionHeader("Upper dial") }
-            item {
-                RadialDialPreview(
-                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_UPPER, index) },
-                    startAngleDeg = -90f,
-                    sweepDeg = 180f,
-                    anchoredAtCenter = true,
-                    boxHeight = 260.dp,
-                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_UPPER, index) },
-                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_UPPER, index) },
-                )
+            if (expenseTrackerEnabled) {
+                item { ActionRow(label = "Open dashboard", onTap = onOpenExpenseTracker) }
             }
             item { SectionHeader("Gestures") }
             item {
@@ -113,16 +100,29 @@ fun SettingsScreen(
                     onClear = { onClearGesture(SwipeGesture.RIGHT) },
                 )
             }
-            item { SectionHeader("Expense tracker") }
+            item { SectionHeader("Upper dial") }
             item {
-                ToggleRow(
-                    label = "Track SMS expenses",
-                    value = expenseTrackerEnabled,
-                    onToggle = onToggleExpenseTracker,
+                RadialDialPreview(
+                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_UPPER, index) },
+                    startAngleDeg = -90f,
+                    sweepDeg = 180f,
+                    anchoredAtCenter = true,
+                    boxHeight = 260.dp,
+                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_UPPER, index) },
+                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_UPPER, index) },
                 )
             }
-            if (expenseTrackerEnabled) {
-                item { ActionRow(label = "Open dashboard", onTap = onOpenExpenseTracker) }
+            item { SectionHeader("Bottom dial") }
+            item {
+                RadialDialPreview(
+                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_BOTTOM, index) },
+                    startAngleDeg = 0f,
+                    sweepDeg = 90f,
+                    anchoredAtCenter = false,
+                    boxHeight = 200.dp,
+                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_BOTTOM, index) },
+                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_BOTTOM, index) },
+                )
             }
             if (hiddenApps.isNotEmpty()) {
                 item { SectionHeader("Hidden apps") }

@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
 private sealed class Screen {
     data object Home : Screen()
     data object Settings : Screen()
-    data object ExpenseTracker : Screen()
+    data class ExpenseTracker(val returnTo: Screen = Home) : Screen()
     data class Search(
         val onPicked: ((AppInfo) -> Unit)? = null,
         val returnTo: Screen = Home,
@@ -100,6 +100,11 @@ private fun LauncherRoot() {
 
     var expenseTrackerEnabled by remember { mutableStateOf(ExpenseRepository.isEnabled(context)) }
     var expenseRefreshTick by remember { mutableStateOf(0) }
+    // Cheap no-op queries against empty tables when the tracker is off, so it's simpler to
+    // always compute these than to thread an enabled check through every call site.
+    val monthlyExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getMonthTotal(context) }
+    val categoryTotalsMonth = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
+    val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUntaggedCount(context) }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -109,6 +114,12 @@ private fun LauncherRoot() {
             ExpenseRepository.syncSms(context)
             expenseRefreshTick++
         }
+    }
+
+    fun openExpenseTracker(returnTo: Screen) {
+        ExpenseRepository.syncSms(context)
+        expenseRefreshTick++
+        screen = Screen.ExpenseTracker(returnTo)
     }
 
     fun refreshApps() {
@@ -189,6 +200,11 @@ private fun LauncherRoot() {
                         if (override != null) AppRepository.launchApp(context, override) else AppRepository.launchContacts(context)
                     },
                     onSwipeDown = { AppRepository.expandNotifications(context) },
+                    expenseTrackerEnabled = expenseTrackerEnabled,
+                    monthlyExpenseTotal = monthlyExpenseTotal,
+                    categoryTotalsMonth = categoryTotalsMonth,
+                    untaggedExpenseCount = untaggedExpenseCount,
+                    onOpenExpenseTracker = { openExpenseTracker(Screen.Home) },
                 )
             }
             is Screen.Settings -> {
@@ -242,11 +258,7 @@ private fun LauncherRoot() {
                             smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
                         }
                     },
-                    onOpenExpenseTracker = {
-                        ExpenseRepository.syncSms(context)
-                        expenseRefreshTick++
-                        screen = Screen.ExpenseTracker
-                    },
+                    onOpenExpenseTracker = { openExpenseTracker(Screen.Settings) },
                     onClose = { screen = Screen.Home },
                 )
             }
@@ -266,7 +278,7 @@ private fun LauncherRoot() {
                         ExpenseRepository.tagMerchant(context, merchant, category)
                         expenseRefreshTick++
                     },
-                    onClose = { screen = Screen.Settings },
+                    onClose = { screen = currentScreen.returnTo },
                 )
             }
             is Screen.Search -> {
