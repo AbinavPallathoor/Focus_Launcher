@@ -1,6 +1,7 @@
 package com.focuslauncher.app
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -50,14 +51,27 @@ object AppRepository {
 
     fun findByKey(apps: List<AppInfo>, key: String): AppInfo? = apps.firstOrNull { it.key == key }
 
+    /**
+     * Disables the transition animation for the activity switch that was just triggered by
+     * [Context.startActivity] above — without this, opening an app still plays the system's
+     * default slide/fade even though our own activity's window-animation style is suppressed,
+     * since that style only governs transitions the system initiates on its own (task-to-front
+     * on Home/back), not ones our code explicitly starts.
+     */
+    @Suppress("DEPRECATION")
+    private fun suppressTransition(context: Context) {
+        (context as? Activity)?.overridePendingTransition(0, 0)
+    }
+
     fun launchApp(context: Context, appInfo: AppInfo) {
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
             component = ComponentName(appInfo.packageName, appInfo.activityName)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         try {
             context.startActivity(intent)
+            suppressTransition(context)
         } catch (e: PackageManager.NameNotFoundException) {
             // App was uninstalled between query and launch; ignore.
         } catch (e: ActivityNotFoundException) {
@@ -71,6 +85,7 @@ object AppRepository {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             context.startActivity(intent)
+            suppressTransition(context)
         } catch (e: ActivityNotFoundException) {
             // No camera app available; nothing to do.
         }
@@ -82,6 +97,7 @@ object AppRepository {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             context.startActivity(intent)
+            suppressTransition(context)
         } catch (e: ActivityNotFoundException) {
             // No contacts app available; nothing to do.
         }
@@ -93,6 +109,7 @@ object AppRepository {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             context.startActivity(intent)
+            suppressTransition(context)
         } catch (e: ActivityNotFoundException) {
             // No uninstaller available (e.g. a system app); nothing to do.
         }

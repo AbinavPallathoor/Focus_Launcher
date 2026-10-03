@@ -13,18 +13,23 @@
         <item name="android:windowDisablePreview">true</item>
     </style>
 
+    <!-- @null here (instead of a real, near-zero-duration animation) is a known source of a
+         frozen-frame bug on some Android versions: the outgoing window's surface never gets
+         flipped away until some other event forces a redraw — which looks exactly like "back
+         doesn't return to the home screen instantly" even though the task switch already
+         happened underneath. @anim/no_animation still triggers a proper surface swap. -->
     <style name="NoWindowAnimation" parent="@android:style/Animation">
-        <item name="android:activityOpenEnterAnimation">@null</item>
-        <item name="android:activityOpenExitAnimation">@null</item>
-        <item name="android:activityCloseEnterAnimation">@null</item>
-        <item name="android:activityCloseExitAnimation">@null</item>
-        <item name="android:taskOpenEnterAnimation">@null</item>
-        <item name="android:taskOpenExitAnimation">@null</item>
-        <item name="android:taskCloseEnterAnimation">@null</item>
-        <item name="android:taskCloseExitAnimation">@null</item>
-        <item name="android:taskToFrontEnterAnimation">@null</item>
-        <item name="android:taskToFrontExitAnimation">@null</item>
-        <item name="android:taskToBackEnterAnimation">@null</item>
-        <item name="android:taskToBackExitAnimation">@null</item>
+        <item name="android:activityOpenEnterAnimation">@anim/no_animation</item>
+        <item name="android:activityOpenExitAnimation">@anim/no_animation</item>
+        <item name="android:activityCloseEnterAnimation">@anim/no_animation</item>
+        <item name="android:activityCloseExitAnimation">@anim/no_animation</item>
+        <item name="android:taskOpenEnterAnimation">@anim/no_animation</item>
+        <item name="android:taskOpenExitAnimation">@anim/no_animation</item>
+        <item name="android:taskCloseEnterAnimation">@anim/no_animation</item>
+        <item name="android:taskCloseExitAnimation">@anim/no_animation</item>
+        <item name="android:taskToFrontEnterAnimation">@anim/no_animation</item>
+        <item name="android:taskToFrontExitAnimation">@anim/no_animation</item>
+        <item name="android:taskToBackEnterAnimation">@anim/no_animation</item>
+        <item name="android:taskToBackExitAnimation">@anim/no_animation</item>
     </style>
 </resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A trivial, effectively-instant animation (not @null) used for every window transition
+  involving this activity. Setting windowAnimationStyle's sub-animations to @null is a known
+  source of a frozen-frame bug on some Android versions/OEMs — the old window's surface never
+  gets flipped away until some other event forces a redraw, which looks exactly like "back
+  doesn't return to the home screen" even though the task switch already happened underneath.
+  A real (if practically instantaneous) animation resource still triggers a proper surface
+  swap.
+-->
+<alpha xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromAlpha="1.0"
+    android:toAlpha="1.0"
+    android:duration="1" />
