@@ -1,23 +1,36 @@
 package com.focuslauncher.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.AppInfo
@@ -25,6 +38,8 @@ import com.focuslauncher.app.RADIAL_GROUP_BOTTOM
 import com.focuslauncher.app.RADIAL_GROUP_UPPER
 import com.focuslauncher.app.SLOTS_PER_RADIAL_GROUP
 import com.focuslauncher.app.SwipeGesture
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Lets the user assign which apps appear on each of the two radial dial menus, override
@@ -54,19 +69,27 @@ fun SettingsScreen(
 
         LazyColumn(modifier = Modifier.padding(top = 12.dp)) {
             item { SectionHeader("Bottom dial") }
-            items(SLOTS_PER_RADIAL_GROUP) { index ->
-                SlotRow(
-                    app = resolveSlot(RADIAL_GROUP_BOTTOM, index),
-                    onTap = { onPickSlot(RADIAL_GROUP_BOTTOM, index) },
-                    onClear = { onClearSlot(RADIAL_GROUP_BOTTOM, index) },
+            item {
+                RadialDialPreview(
+                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_BOTTOM, index) },
+                    startAngleDeg = 0f,
+                    sweepDeg = 90f,
+                    anchoredAtCenter = false,
+                    boxHeight = 200.dp,
+                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_BOTTOM, index) },
+                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_BOTTOM, index) },
                 )
             }
             item { SectionHeader("Upper dial") }
-            items(SLOTS_PER_RADIAL_GROUP) { index ->
-                SlotRow(
-                    app = resolveSlot(RADIAL_GROUP_UPPER, index),
-                    onTap = { onPickSlot(RADIAL_GROUP_UPPER, index) },
-                    onClear = { onClearSlot(RADIAL_GROUP_UPPER, index) },
+            item {
+                RadialDialPreview(
+                    slots = List(SLOTS_PER_RADIAL_GROUP) { index -> resolveSlot(RADIAL_GROUP_UPPER, index) },
+                    startAngleDeg = -90f,
+                    sweepDeg = 180f,
+                    anchoredAtCenter = true,
+                    boxHeight = 260.dp,
+                    onTapSlot = { index -> onPickSlot(RADIAL_GROUP_UPPER, index) },
+                    onClearSlot = { index -> onClearSlot(RADIAL_GROUP_UPPER, index) },
                 )
             }
             item { SectionHeader("Gestures") }
@@ -122,6 +145,114 @@ private fun SectionHeader(title: String) {
                 .padding(top = 8.dp)
                 .height(1.dp)
                 .background(SubtextGrey.copy(alpha = 0.25f))
+        )
+    }
+}
+
+private val PREVIEW_RADIUS = 96.dp
+private val PREVIEW_ANCHOR_INSET = 32.dp
+private val PREVIEW_NODE_DIAMETER = 40.dp
+
+/**
+ * A small, non-interactive-arc replica of the actual on-screen dial: nodes laid out along
+ * the same [startAngleDeg]/[sweepDeg] sector so it's immediately clear which physical pull
+ * direction launches which app. Tap a node to assign/replace that slot; long-press a filled
+ * one to clear it. [anchoredAtCenter] mirrors the real upper dial's 180° sweep, which needs
+ * room both above and below its anchor rather than just above it.
+ */
+@Composable
+private fun RadialDialPreview(
+    slots: List<AppInfo?>,
+    startAngleDeg: Float,
+    sweepDeg: Float,
+    anchoredAtCenter: Boolean,
+    boxHeight: Dp,
+    onTapSlot: (Int) -> Unit,
+    onClearSlot: (Int) -> Unit,
+) {
+    val density = LocalDensity.current
+    val radiusPx = with(density) { PREVIEW_RADIUS.toPx() }
+    val insetPx = with(density) { PREVIEW_ANCHOR_INSET.toPx() }
+
+    fun nodeAngleRad(index: Int) =
+        Math.toRadians((startAngleDeg + (index + 0.5f) / slots.size * sweepDeg).toDouble())
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(boxHeight)
+    ) {
+        val anchorDpX = maxWidth - PREVIEW_ANCHOR_INSET
+        val anchorDpY = if (anchoredAtCenter) maxHeight / 2 else maxHeight - PREVIEW_ANCHOR_INSET
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val anchor = Offset(
+                size.width - insetPx,
+                if (anchoredAtCenter) size.height / 2f else size.height - insetPx
+            )
+            drawArc(
+                color = SubtextGrey.copy(alpha = 0.3f),
+                startAngle = startAngleDeg + 180f,
+                sweepAngle = sweepDeg,
+                useCenter = false,
+                topLeft = Offset(anchor.x - radiusPx, anchor.y - radiusPx),
+                size = Size(radiusPx * 2, radiusPx * 2),
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+            for (i in slots.indices) {
+                val angleRad = nodeAngleRad(i)
+                val nodeOffset = Offset(
+                    anchor.x - (cos(angleRad) * radiusPx).toFloat(),
+                    anchor.y - (sin(angleRad) * radiusPx).toFloat()
+                )
+                drawLine(
+                    color = SubtextGrey.copy(alpha = 0.25f),
+                    start = anchor,
+                    end = nodeOffset,
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+        }
+
+        for (i in slots.indices) {
+            val angleRad = nodeAngleRad(i)
+            val nodeX = anchorDpX - PREVIEW_RADIUS * cos(angleRad).toFloat()
+            val nodeY = anchorDpY - PREVIEW_RADIUS * sin(angleRad).toFloat()
+            PreviewNode(
+                app = slots[i],
+                modifier = Modifier.offset(x = nodeX - PREVIEW_NODE_DIAMETER / 2, y = nodeY - PREVIEW_NODE_DIAMETER / 2),
+                onTap = { onTapSlot(i) },
+                onClear = { onClearSlot(i) },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PreviewNode(
+    app: AppInfo?,
+    modifier: Modifier = Modifier,
+    onTap: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .size(PREVIEW_NODE_DIAMETER)
+            .background(if (app != null) PureWhite else PureBlack, CircleShape)
+            .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = 0.5f)), CircleShape)
+            .combinedClickable(
+                onClick = onTap,
+                onLongClick = if (app != null) onClear else null,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = app?.let { abbreviate(it.label) } ?: "+",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (app != null) PureBlack else SubtextGrey,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
         )
     }
 }

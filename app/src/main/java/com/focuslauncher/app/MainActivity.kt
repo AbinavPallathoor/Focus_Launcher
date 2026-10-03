@@ -6,12 +6,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,6 +42,15 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideStatusBar()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onResume() {
+        super.onResume()
+        // Belt-and-suspenders alongside the no-animation window style in themes.xml —
+        // returning to the home screen should feel like the OS surfacing again, not like
+        // an app opening, even on OEM skins that don't fully honor the theme attribute.
+        overridePendingTransition(0, 0)
     }
 
     private fun hideStatusBar() {
@@ -135,14 +141,10 @@ private fun LauncherRoot() {
 
     AnimatedContent(
         targetState = screen,
+        // A quick crossfade rather than a sliding "sheet" — screens should read as the
+        // same persistent OS surface changing state, not as separate apps opening on top.
         transitionSpec = {
-            if (initialState is Screen.Home && targetState !is Screen.Home) {
-                (slideInVertically(tween(320)) { height -> height } + fadeIn(tween(320))) togetherWith
-                    fadeOut(tween(200))
-            } else {
-                fadeIn(tween(220)) togetherWith
-                    (slideOutVertically(tween(320)) { height -> height } + fadeOut(tween(260)))
-            }.using(SizeTransform(clip = false))
+            fadeIn(tween(140)) togetherWith fadeOut(tween(140))
         },
         label = "screenTransition"
     ) { currentScreen ->
@@ -164,6 +166,7 @@ private fun LauncherRoot() {
                         val override = resolveGestureApp(SwipeGesture.RIGHT)
                         if (override != null) AppRepository.launchApp(context, override) else AppRepository.launchContacts(context)
                     },
+                    onSwipeDown = { AppRepository.expandNotifications(context) },
                 )
             }
             is Screen.Settings -> {

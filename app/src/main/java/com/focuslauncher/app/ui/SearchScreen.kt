@@ -60,11 +60,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.focuslauncher.app.AppInfo
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.animation.core.Animatable
-
-private const val AUTO_LAUNCH_DEBOUNCE_MS = 250L
 
 private fun filterApps(apps: List<AppInfo>, query: String): List<AppInfo> {
     if (query.isBlank()) return apps
@@ -115,16 +112,12 @@ fun SearchScreen(
         keyboardController?.show()
     }
 
-    // Auto-launch once typing narrows to exactly one match (debounced so fast typists
-    // aren't interrupted mid-word). Only applies in normal launch mode.
-    LaunchedEffect(query) {
+    // Auto-launch the instant typing narrows to exactly one match. Only applies in
+    // normal launch mode — no debounce, so the app opens the moment it's unambiguous.
+    LaunchedEffect(query, filtered) {
         contextMenuAppKey = null
-        if (onPick == null && query.isNotBlank()) {
-            delay(AUTO_LAUNCH_DEBOUNCE_MS)
-            val matches = filterApps(apps, query)
-            if (matches.size == 1) {
-                select(matches[0])
-            }
+        if (onPick == null && query.isNotBlank() && filtered.size == 1) {
+            select(filtered[0])
         }
     }
 
@@ -143,9 +136,7 @@ fun SearchScreen(
                 .fillMaxWidth()
                 .focusRequester(focusRequester),
             placeholder = { Text(if (onPick != null) "Pick an app" else "Search apps", style = MaterialTheme.typography.bodyLarge, color = SubtextGrey) },
-            // An explicit color on textStyle would override colors.focusedTextColor below,
-            // so leave it Unspecified and let the TextFieldColors win.
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.Unspecified),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = PureWhite),
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(
@@ -158,11 +149,9 @@ fun SearchScreen(
                 unfocusedContainerColor = PureBlack,
                 focusedIndicatorColor = SubtextGrey,
                 unfocusedIndicatorColor = SubtextGrey.copy(alpha = 0.4f),
-                // The typed characters themselves stay invisible — only the narrowing
-                // result list below is shown — but a faint cursor still confirms focus.
-                focusedTextColor = Color.Transparent,
-                unfocusedTextColor = Color.Transparent,
-                cursorColor = SubtextGrey,
+                focusedTextColor = PureWhite,
+                unfocusedTextColor = PureWhite,
+                cursorColor = PureWhite,
             )
         )
 

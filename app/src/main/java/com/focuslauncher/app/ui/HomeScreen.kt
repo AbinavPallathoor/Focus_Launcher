@@ -17,10 +17,8 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +45,7 @@ import java.util.Locale
 import kotlin.math.abs
 
 private const val SWIPE_UP_OPEN_THRESHOLD_PX = -60f
+private const val SWIPE_DOWN_OPEN_THRESHOLD_PX = 60f
 private const val SWIPE_HORIZONTAL_THRESHOLD_PX = 90f
 private const val SCREEN_TIME_POLL_MS = 60_000L
 // The upper dial sweeps a 180° arc, so a downward-pointing node sits a full radius
@@ -64,6 +63,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onSwipeLeft: () -> Unit,
     onSwipeRight: () -> Unit,
+    onSwipeDown: () -> Unit,
 ) {
     val context = LocalContext.current
     val time = rememberCurrentTime()
@@ -127,14 +127,22 @@ fun HomeScreen(
                         accumulatedDy += amount.y
                         val absDx = abs(accumulatedDx)
                         val absDy = abs(accumulatedDy)
-                        if (accumulatedDy < SWIPE_UP_OPEN_THRESHOLD_PX && absDy > absDx) {
-                            change.consume()
-                            gestureResolved = true
-                            onOpenSearch()
-                        } else if (absDx > SWIPE_HORIZONTAL_THRESHOLD_PX && absDx > absDy) {
-                            change.consume()
-                            gestureResolved = true
-                            if (accumulatedDx < 0) onSwipeLeft() else onSwipeRight()
+                        when {
+                            accumulatedDy < SWIPE_UP_OPEN_THRESHOLD_PX && absDy > absDx -> {
+                                change.consume()
+                                gestureResolved = true
+                                onOpenSearch()
+                            }
+                            accumulatedDy > SWIPE_DOWN_OPEN_THRESHOLD_PX && absDy > absDx -> {
+                                change.consume()
+                                gestureResolved = true
+                                onSwipeDown()
+                            }
+                            absDx > SWIPE_HORIZONTAL_THRESHOLD_PX && absDx > absDy -> {
+                                change.consume()
+                                gestureResolved = true
+                                if (accumulatedDx < 0) onSwipeLeft() else onSwipeRight()
+                            }
                         }
                     }
                 )
@@ -196,10 +204,6 @@ fun HomeScreen(
             }
         }
 
-        // Visual affordance only — the swipe-up-to-search gesture is handled by the
-        // root Box above so it works from anywhere on the home screen.
-        SwipeUpIndicator(modifier = Modifier.align(Alignment.BottomCenter))
-
         RadialAppMenu(
             apps = upperDialApps,
             onLaunch = onLaunch,
@@ -212,23 +216,6 @@ fun HomeScreen(
             apps = bottomDialApps,
             onLaunch = onLaunch,
             modifier = Modifier.align(Alignment.BottomEnd),
-        )
-    }
-}
-
-@Composable
-private fun SwipeUpIndicator(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .width(40.dp)
-                .height(4.dp)
-                .background(SubtextGrey.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
         )
     }
 }

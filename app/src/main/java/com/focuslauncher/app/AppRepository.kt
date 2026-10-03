@@ -1,5 +1,6 @@
 package com.focuslauncher.app
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -105,5 +106,23 @@ object AppRepository {
     fun closeApp(context: Context, appInfo: AppInfo) {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         activityManager.killBackgroundProcesses(appInfo.packageName)
+    }
+
+    /**
+     * Swipe-down on the home screen should behave like it does everywhere else in the OS —
+     * pulling the notification shade down. There's no public API for this; every custom
+     * launcher reaches for the same reflection call against the hidden StatusBarManager,
+     * gated by the normal (auto-granted) EXPAND_STATUS_BAR permission.
+     */
+    @SuppressLint("WrongConstant")
+    fun expandNotifications(context: Context) {
+        try {
+            val statusBarService = context.getSystemService("statusbar")
+            val statusBarManagerClass = Class.forName("android.app.StatusBarManager")
+            val method = statusBarManagerClass.getMethod("expandNotificationsPanel")
+            method.invoke(statusBarService)
+        } catch (e: Exception) {
+            // Reflection target varies by OEM/Android version; nothing to do if unavailable.
+        }
     }
 }

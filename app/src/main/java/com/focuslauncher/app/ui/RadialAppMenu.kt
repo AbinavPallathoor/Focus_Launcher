@@ -55,13 +55,17 @@ private val BASE_RADIUS = 150.dp
 private val MIN_NODE_SPACING = 56.dp
 private val ANCHOR_INSET = 40.dp
 private val NODE_DIAMETER = 44.dp
+// Much bigger than the visible handle dot — a wide, easy-to-find touch target to start
+// the pull from, without changing where the dot itself renders (same anchor point).
+// Capped at 2 * ANCHOR_INSET so the centering padding below never goes negative.
+private val HANDLE_HIT_DIAMETER = 80.dp
 private val MIN_SELECT_DISTANCE = 28.dp
 private val CALLOUT_DIAGONAL = 32.dp
 private val CALLOUT_HORIZONTAL = 36.dp
 private val CALLOUT_BOX_WIDTH = 150.dp
 
 /** "Google Photos" -> "GP", "Chrome" -> "CH". */
-private fun abbreviate(label: String): String {
+internal fun abbreviate(label: String): String {
     val words = label.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
     return when {
         words.size >= 2 -> (words[0].take(1) + words[1].take(1)).uppercase()
@@ -115,8 +119,11 @@ fun RadialAppMenu(
         if (apps.isEmpty()) return null
         val distance = sqrt(offset.x * offset.x + offset.y * offset.y)
         if (distance < minSelectPx) return null
-        val angleDeg = Math.toDegrees(atan2((-offset.y).toDouble(), (-offset.x).toDouble())).toFloat()
-        if (angleDeg < startAngleDeg || angleDeg > startAngleDeg + sweepDeg) return null
+        // Once pulled far enough, always resolve to an app — clamp the angle into the
+        // dial's sector instead of returning null, so a drag slightly outside the arc
+        // still lands on the nearest edge app rather than coming up empty on release.
+        val rawAngleDeg = Math.toDegrees(atan2((-offset.y).toDouble(), (-offset.x).toDouble())).toFloat()
+        val angleDeg = rawAngleDeg.coerceIn(startAngleDeg, startAngleDeg + sweepDeg)
         return (((angleDeg - startAngleDeg) / sweepDeg) * apps.size).toInt().coerceIn(0, apps.size - 1)
     }
 
@@ -244,8 +251,11 @@ fun RadialAppMenu(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = bottomPadding)
-                .padding(ANCHOR_INSET - NODE_DIAMETER / 2)
-                .size(NODE_DIAMETER)
+                // Padding keeps the hit box centered on the same anchor point regardless
+                // of its size, so growing HANDLE_HIT_DIAMETER only grows the influence
+                // zone — the visible dot below stays exactly where it was.
+                .padding(ANCHOR_INSET - HANDLE_HIT_DIAMETER / 2)
+                .size(HANDLE_HIT_DIAMETER)
                 .pointerInput(apps) {
                     detectDragGestures(
                         onDragStart = {

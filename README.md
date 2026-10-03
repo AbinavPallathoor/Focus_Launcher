@@ -13,13 +13,21 @@ gesture-driven radial dials for quick app launching, and a full-text search.
     app's name glides into a left-side callout box as you rotate. Release to launch.
   - The bottom dial sweeps a 90° quarter-circle; the upper dial sweeps a full 180°.
   - Node spacing grows automatically so apps never overlap, however many are assigned.
+  - The pull handle has a generous invisible touch zone around it (much bigger than the
+    visible dot) so it's easy to find without looking, and once you've pulled far enough
+    from the anchor, releasing always launches the nearest app — a direction that's
+    slightly outside the arc still resolves to the nearest edge app instead of launching
+    nothing.
 - **Swipe up** anywhere on the home screen to open search. Results appear instantly as
-  you type — the typed text itself stays hidden, and the top (most likely) match is
-  highlighted so pressing Enter launches it immediately.
+  you type, with the top (most likely) match highlighted and launched immediately once
+  typing narrows to a single app (no debounce — it opens the moment it's unambiguous) or
+  on pressing Enter.
 - **Swipe left / right** on the home screen trigger quick actions — Camera and Contacts
-  by default, both overridable.
-- **Next calendar event** — shown below the date, read straight from the device's calendar
-  provider (whatever's synced from a Google account already on-device — no separate sign-in).
+  by default, both overridable. **Swipe down** pulls down the system notification shade,
+  same as it would from any other app.
+- **Next calendar event** — shown below the date with its start and end time, read
+  straight from the device's calendar provider (whatever's synced from a Google account
+  already on-device — no separate sign-in).
 - **Long-press an app** in search to reveal an inline action panel — filled monochrome
   icons (same pack, same size) for Uninstall, Rename, Hide, and Close, sliding in from the
   right edge of that same row (no separate popup), separated from the app name by a thin
@@ -30,9 +38,14 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   - Rename sets a launcher-only display name used everywhere the app appears.
   - Hide removes it from search while keeping any dial/gesture assignment working.
 - **Settings** (long-press the clock) — grouped into labeled sections (Bottom dial / Upper
-  dial / Gestures / Hidden apps), each under a thin divider. Assign apps to each radial
-  dial's slot, override the swipe-left/right actions, and unhide hidden apps.
-- Status bar is hidden for a fully immersive home screen.
+  dial / Gestures / Hidden apps), each under a thin divider. The two dial sections show a
+  small radial replica of the actual on-screen dial — the same arc, in the same corner —
+  instead of a plain list, so it's immediately obvious which pull direction launches which
+  app. Tap a node to assign/replace that slot; long-press a filled one to clear it.
+  Gesture overrides and unhiding apps are still plain rows below.
+- Status bar is hidden, and system window/activity-open animations are disabled for this
+  activity, so the home screen reads as the persistent OS shell rather than an app that
+  keeps opening and closing on top of it.
 
 ## Project structure
 
@@ -79,6 +92,10 @@ Requires Android Studio (or a local Gradle + Android SDK install). `minSdk 26`, 
 - `READ_CALENDAR` — for the upcoming-event display, requested at runtime (tap "Enable
   calendar" on the home screen).
 - `KILL_BACKGROUND_PROCESSES` — for the "Close" action in an app's long-press menu.
+- `EXPAND_STATUS_BAR` — a normal, auto-granted permission used to pull down the
+  notification shade on swipe-down, the same way every other custom launcher does (there's
+  no public API for this, just a long-standing reflection call against the hidden
+  `StatusBarManager`).
 
 ## Known limitations
 

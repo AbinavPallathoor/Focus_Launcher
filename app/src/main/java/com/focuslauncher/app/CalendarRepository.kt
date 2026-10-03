@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
  */
 object CalendarRepository {
 
-    data class UpcomingEvent(val title: String, val startMillis: Long, val allDay: Boolean)
+    data class UpcomingEvent(val title: String, val startMillis: Long, val endMillis: Long, val allDay: Boolean)
 
     fun hasPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) ==
@@ -37,6 +37,7 @@ object CalendarRepository {
         val projection = arrayOf(
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
             CalendarContract.Instances.ALL_DAY,
         )
 
@@ -47,7 +48,8 @@ object CalendarRepository {
                         UpcomingEvent(
                             title = cursor.getString(0) ?: return null,
                             startMillis = cursor.getLong(1),
-                            allDay = cursor.getInt(2) != 0,
+                            endMillis = cursor.getLong(2),
+                            allDay = cursor.getInt(3) != 0,
                         )
                     } else null
                 }
@@ -62,10 +64,16 @@ object CalendarRepository {
         calendar.timeInMillis = event.startMillis
         val eventDay = calendar.get(Calendar.DAY_OF_YEAR) to calendar.get(Calendar.YEAR)
 
+        val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
         val whenText = when {
             event.allDay -> "Today"
-            eventDay == today -> SimpleDateFormat("h:mm a", Locale.getDefault()).format(event.startMillis)
-            else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(event.startMillis)
+            eventDay == today ->
+                "${timeFormat.format(event.startMillis)} – ${timeFormat.format(event.endMillis)}"
+            else -> {
+                val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+                "${dateFormat.format(event.startMillis)}, " +
+                    "${timeFormat.format(event.startMillis)} – ${timeFormat.format(event.endMillis)}"
+            }
         }
         return "${event.title} · $whenText"
     }
