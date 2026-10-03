@@ -55,12 +55,12 @@ gesture-driven radial dials for quick app launching, and a full-text search.
   locally, nothing leaves the device. Enabling it for the first time pulls in today's
   messages only, not the device's entire SMS history; every check after that is purely
   incremental.
-  - **On the home screen itself**, below the calendar block: this month's total with
-    today's total right beneath it, a bar graph of categories sorted shortest to tallest
-    left-to-right (only categories with spend so far are shown, to cut clutter), and a
-    `>`-prefixed breakdown line per category — matching the calendar block's own `>`
-    convention. Tapping this area opens the dashboard; a white badge on its `>` button
-    shows how many merchants still need tagging.
+  - **On the home screen itself**, below the calendar block: today's total as the headline
+    with this month's total as a smaller line beneath it, a bar graph of categories sorted
+    shortest to tallest left-to-right (only categories with spend so far are shown, to cut
+    clutter), and a `>`-prefixed breakdown line per category — matching the calendar
+    block's own `>` convention. Tapping this area opens the dashboard; a white badge on its
+    `>` button shows how many merchants still need tagging.
   - **The dashboard** (Settings → Open dashboard, or tap the home screen summary) adds:
     today's total (animating in like an odometer when a background re-sync finds new
     spend), any merchant seen for the first time with one-tap category chips — each

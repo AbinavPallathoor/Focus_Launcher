@@ -333,18 +333,8 @@ private fun ExpenseSummary(
             verticalAlignment = Alignment.Top,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = "THIS MONTH", style = MaterialTheme.typography.bodySmall, color = SubtextGrey, letterSpacing = 1.sp)
+                Text(text = "TODAY", style = MaterialTheme.typography.bodySmall, color = SubtextGrey, letterSpacing = 1.sp)
                 // Rolls like an odometer when a background re-sync finds new spend.
-                AnimatedContent(
-                    targetState = monthTotal,
-                    transitionSpec = {
-                        (slideInVertically(tween(260)) { height -> height } + fadeIn(tween(260))) togetherWith
-                            (slideOutVertically(tween(260)) { height -> -height } + fadeOut(tween(260)))
-                    },
-                    label = "monthTotal",
-                ) { total ->
-                    Text(text = formatExpenseAmount(total), style = MaterialTheme.typography.headlineMedium, color = PureWhite)
-                }
                 AnimatedContent(
                     targetState = todayTotal,
                     transitionSpec = {
@@ -352,10 +342,20 @@ private fun ExpenseSummary(
                             (slideOutVertically(tween(260)) { height -> -height } + fadeOut(tween(260)))
                     },
                     label = "todayTotal",
+                ) { total ->
+                    Text(text = formatExpenseAmount(total), style = MaterialTheme.typography.headlineMedium, color = PureWhite)
+                }
+                AnimatedContent(
+                    targetState = monthTotal,
+                    transitionSpec = {
+                        (slideInVertically(tween(260)) { height -> height } + fadeIn(tween(260))) togetherWith
+                            (slideOutVertically(tween(260)) { height -> -height } + fadeOut(tween(260)))
+                    },
+                    label = "monthTotal",
                     modifier = Modifier.padding(top = 2.dp),
                 ) { total ->
                     Text(
-                        text = "Today  ${formatExpenseAmount(total)}",
+                        text = "This month  ${formatExpenseAmount(total)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = SubtextGrey,
                     )
