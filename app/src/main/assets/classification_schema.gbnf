@@ -1,30 +1,24 @@
-# Constrains the classifier model to emit only valid, schema-exact JSON — enumerated
-# explicitly (rather than relying on {m,n} repetition ranges) so there's no ambiguity about
-# what this grammar allows, even on an older llama.cpp grammar parser.
-root    ::= "{" ws "\"guess\":" ws guess "," ws "\"confidence\":" ws confidence "," ws "\"questions\":" ws questions ws "}"
+# Constrains the classifier model to emit only valid, schema-exact JSON. Every rule is kept
+# on a single line (even the longer alternations) -- a line starting with a bare "|" is not
+# a safe continuation of the previous line here, unlike inside an already-open paren/bracket.
+root ::= "{" ws "\"guess\":" ws guess "," ws "\"confidence\":" ws confidence "," ws "\"questions\":" ws questions ws "}"
 
-guess   ::= "{" ws "\"kind\":" ws kind "," ws "\"category\":" ws category "," ws "\"isPerson\":" ws bool ws "}"
+guess ::= "{" ws "\"kind\":" ws kind "," ws "\"category\":" ws category "," ws "\"isPerson\":" ws bool ws "}"
 
-kind     ::= "\"EXPENSE\"" | "\"LENT\"" | "\"BORROWED\"" | "\"REPAYMENT_IN\"" | "\"REPAYMENT_OUT\"" | "\"INCOME\""
+kind ::= "\"EXPENSE\"" | "\"LENT\"" | "\"BORROWED\"" | "\"REPAYMENT_IN\"" | "\"REPAYMENT_OUT\"" | "\"INCOME\""
 category ::= "\"FOOD\"" | "\"TRANSPORT\"" | "\"ESSENTIALS\"" | "\"EXTRAS\"" | "\"SUBSCRIPTION\"" | "null"
-bool     ::= "true" | "false"
+bool ::= "true" | "false"
 
 confidence ::= [01] "." [0-9] [0-9]?
 
-questions ::= "[]"
-            | "[" ws question ws "]"
-            | "[" ws question ws "," ws question ws "]"
-            | "[" ws question ws "," ws question ws "," ws question ws "]"
-            | "[" ws question ws "," ws question ws "," ws question ws "," ws question ws "]"
+questions ::= "[]" | ("[" ws question ws "]") | ("[" ws question ws "," ws question ws "]") | ("[" ws question ws "," ws question ws "," ws question ws "]") | ("[" ws question ws "," ws question ws "," ws question ws "," ws question ws "]")
 
 question ::= "{" ws "\"question\":" ws string "," ws "\"options\":" ws options ws "}"
 
-options ::= "[" ws string ws "," ws string ws "]"
-          | "[" ws string ws "," ws string ws "," ws string ws "]"
-          | "[" ws string ws "," ws string ws "," ws string ws "," ws string ws "]"
+options ::= ("[" ws string ws "," ws string ws "]") | ("[" ws string ws "," ws string ws "," ws string ws "]") | ("[" ws string ws "," ws string ws "," ws string ws "," ws string ws "]")
 
 string ::= "\"" char* "\""
-char   ::= [^"\\\x00-\x1f] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex
-hex    ::= [0-9a-fA-F]
+char ::= [^"\\\x00-\x1f] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex
+hex ::= [0-9a-fA-F]
 
 ws ::= [ \t\n]*

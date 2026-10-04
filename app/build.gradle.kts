@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.focuslauncher.app"
     compileSdk = 34
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.focuslauncher.app"
@@ -13,6 +14,31 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        // The classifier's native library (and the model itself) only ever targets real arm64
+        // phones; this also happens to be exactly what the local arm64 emulator used for testing
+        // this whole project reports as its ABI, so no separate x86 build path is needed.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+                arguments += "-DANDROID_STL=c++_shared"
+                // Force Release optimization for the native lib regardless of the Gradle debug/
+                // release variant — an unoptimized (-O0) build of llama.cpp makes LLM inference
+                // dramatically (10x+) slower, which showed up as a single generation call taking
+                // tens of minutes on the test emulator instead of tens of seconds. Debugging the
+                // Kotlin side doesn't need the native side to also be unoptimized.
+                arguments += "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {

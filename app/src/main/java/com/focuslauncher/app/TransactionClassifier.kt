@@ -18,7 +18,10 @@ object TransactionClassifier {
     data class ClassificationResult(val guess: Guess, val questions: List<Question>)
 
     private const val MAX_QUESTIONS = 4
-    private const val MAX_TOKENS = 400
+    // The schema's own JSON is compact (a guess, a confidence, up to 4 short questions) — this
+    // is a hard ceiling in case the grammar ever lets generation run past a complete object,
+    // not the expected length.
+    private const val MAX_TOKENS = 220
 
     /**
      * Null means "couldn't classify right now" (model not downloaded, failed to load, bad
