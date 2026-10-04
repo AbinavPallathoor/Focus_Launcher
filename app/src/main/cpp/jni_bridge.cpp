@@ -1,7 +1,10 @@
 // JNI bridge between LlamaEngine.kt and llama.cpp. Deliberately minimal: load a GGUF model
-// once, run one grammar-constrained generation per call, nothing else. Every exported function
-// is defensive about failure (returns false/null rather than letting an exception escape) —
-// Kotlin-side callers already treat any failure here as "couldn't classify right now".
+// once, run one grammar-constrained generation per call, nothing else. The grammar is passed
+// fresh on every generate() call rather than fixed at load time — different features (the
+// per-transaction classifier, the dashboard's free-text command bar) need different output
+// schemas against the same loaded model. Every exported function is defensive about failure
+// (returns false/null rather than letting an exception escape) — Kotlin-side callers already
+// treat any failure here as "couldn't run that right now".
 
 #include <jni.h>
 #include <android/log.h>
@@ -19,7 +22,6 @@ namespace {
 llama_model* g_model = nullptr;
 llama_context* g_ctx = nullptr;
 const llama_vocab* g_vocab = nullptr;
-std::string g_grammar;
 
 void unloadLocked() {
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
@@ -29,10 +31,8 @@ void unloadLocked() {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_focuslauncher_app_LlamaEngine_nativeLoad(JNIEnv* env, jobject /*thiz*/, jstring modelPath, jstring grammarText) {
+Java_com_focuslauncher_app_LlamaEngine_nativeLoad(JNIEnv* env, jobject /*thiz*/, jstring modelPath, jint threads) {
     const char* modelPathChars = env->GetStringUTFChars(modelPath, nullptr);
-    const char* grammarChars = env->GetStringUTFChars(grammarText, nullptr);
-    g_grammar.assign(grammarChars);
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = 0; // CPU-only: no GPU backend built in for this target
@@ -40,7 +40,6 @@ Java_com_focuslauncher_app_LlamaEngine_nativeLoad(JNIEnv* env, jobject /*thiz*/,
     g_model = llama_model_load_from_file(modelPathChars, model_params);
 
     env->ReleaseStringUTFChars(modelPath, modelPathChars);
-    env->ReleaseStringUTFChars(grammarText, grammarChars);
 
     if (!g_model) {
         LOGE("Failed to load model from file");
@@ -49,11 +48,12 @@ Java_com_focuslauncher_app_LlamaEngine_nativeLoad(JNIEnv* env, jobject /*thiz*/,
 
     g_vocab = llama_model_get_vocab(g_model);
 
+    const int32_t n_threads = threads > 0 ? threads : 4;
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 2048;
     ctx_params.n_batch = 512;
-    ctx_params.n_threads = 4;
-    ctx_params.n_threads_batch = 4;
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads;
 
     g_ctx = llama_init_from_model(g_model, ctx_params);
     if (!g_ctx) {
@@ -67,7 +67,7 @@ Java_com_focuslauncher_app_LlamaEngine_nativeLoad(JNIEnv* env, jobject /*thiz*/,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_focuslauncher_app_LlamaEngine_nativeGenerate(JNIEnv* env, jobject /*thiz*/, jstring promptJ, jint maxTokens) {
+Java_com_focuslauncher_app_LlamaEngine_nativeGenerate(JNIEnv* env, jobject /*thiz*/, jstring promptJ, jint maxTokens, jstring grammarJ) {
     if (!g_model || !g_ctx || !g_vocab) {
         return nullptr;
     }
@@ -75,6 +75,10 @@ Java_com_focuslauncher_app_LlamaEngine_nativeGenerate(JNIEnv* env, jobject /*thi
     const char* promptChars = env->GetStringUTFChars(promptJ, nullptr);
     std::string prompt(promptChars);
     env->ReleaseStringUTFChars(promptJ, promptChars);
+
+    const char* grammarChars = env->GetStringUTFChars(grammarJ, nullptr);
+    std::string grammarText(grammarChars);
+    env->ReleaseStringUTFChars(grammarJ, grammarChars);
 
     // Apply the model's own embedded chat template so an instruct-tuned model like Qwen2.5
     // actually follows the instructions instead of just continuing the raw text.
@@ -113,7 +117,7 @@ Java_com_focuslauncher_app_LlamaEngine_nativeGenerate(JNIEnv* env, jobject /*thi
     // Grammar carries parse state, so the sampler chain is rebuilt fresh for every call.
     llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sparams);
-    llama_sampler* grammar = llama_sampler_init_grammar(g_vocab, g_grammar.c_str(), "root");
+    llama_sampler* grammar = llama_sampler_init_grammar(g_vocab, grammarText.c_str(), "root");
     if (!grammar) {
         LOGE("Failed to parse grammar");
         llama_sampler_free(smpl);

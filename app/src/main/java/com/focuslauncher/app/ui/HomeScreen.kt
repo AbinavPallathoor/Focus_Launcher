@@ -3,14 +3,21 @@ package com.focuslauncher.app.ui
 import android.Manifest
 import android.graphics.Rect
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -35,22 +42,37 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +81,9 @@ import com.focuslauncher.app.CalendarRepository
 import com.focuslauncher.app.DeviceUsage
 import com.focuslauncher.app.ExpenseCategory
 import com.focuslauncher.app.ExpenseRepository
+import com.focuslauncher.app.ResolvedBy
+import com.focuslauncher.app.TransactionKind
+import com.focuslauncher.app.transactionTag
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -92,9 +117,9 @@ fun HomeScreen(
     categoryTotalsMonth: Map<ExpenseCategory, Double>,
     untaggedExpenseCount: Int,
     onOpenExpenseTracker: () -> Unit,
-    pendingQuestion: ExpenseRepository.PendingQuestion?,
-    pendingQuestionCount: Int,
-    onAnswerQuestion: (questionId: Long, answer: String) -> Unit,
+    recentTransactions: List<ExpenseRepository.Transaction>,
+    onCorrectTransaction: (transactionId: Long, note: String) -> Unit,
+    onConfirmTransaction: (transactionId: Long) -> Unit,
 ) {
     val context = LocalContext.current
     val time = rememberCurrentTime()
@@ -292,6 +317,35 @@ fun HomeScreen(
             }
         }
 
+        // The terminal feed is composed before the dials (and the dials before the modal
+        // overlay) so z-order comes out right: dials draw on top of the feed — they're the
+        // thing you're actively dragging, the feed shouldn't be able to cover them — while the
+        // full-screen correction overlay still ends up on top of everything, dials included,
+        // since it's modal.
+        var focusedTransactionId by remember { mutableStateOf<Long?>(null) }
+        var updatingTransactionId by remember { mutableStateOf<Long?>(null) }
+        var dismissedIds by remember { mutableStateOf(emptySet<Long>()) }
+        if (expenseTrackerEnabled) {
+            // Cleared whenever the transaction list is actually recomputed (a new sync or a
+            // classification finishing) — not on a timer — so "updating…" never lies about
+            // whether the correction has really landed yet.
+            LaunchedEffect(recentTransactions) { updatingTransactionId = null }
+
+            TerminalFeed(
+                transactions = recentTransactions,
+                dismissedIds = dismissedIds,
+                updatingTransactionId = updatingTransactionId,
+                onRequestFocus = { id -> focusedTransactionId = id },
+                onConfirm = { id ->
+                    dismissedIds = dismissedIds + id
+                    onConfirmTransaction(id)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 64.dp),
+            )
+        }
+
         RadialAppMenu(
             apps = upperDialApps,
             onLaunch = onLaunch,
@@ -306,19 +360,25 @@ fun HomeScreen(
             modifier = Modifier.align(Alignment.BottomEnd),
         )
 
-        if (pendingQuestion != null) {
-            var dismissed by remember(pendingQuestion.id) { mutableStateOf(false) }
-            if (!dismissed) {
-                PendingQuestionCard(
-                    question = pendingQuestion,
-                    queuedCount = pendingQuestionCount,
-                    onAnswer = { answer -> onAnswerQuestion(pendingQuestion.id, answer) },
-                    onDismiss = { dismissed = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(24.dp),
-                )
-            }
+        if (expenseTrackerEnabled) {
+            val focusedTransaction = recentTransactions.firstOrNull { it.id == focusedTransactionId }
+            // Held onto through the dismiss animation: the instant focusedTransactionId goes
+            // null, focusedTransaction would too, and AnimatedVisibility's exit transition needs
+            // something non-null to keep rendering while it plays.
+            var lastShownTransaction by remember { mutableStateOf<ExpenseRepository.Transaction?>(null) }
+            if (focusedTransaction != null) lastShownTransaction = focusedTransaction
+
+            BackHandler(enabled = focusedTransactionId != null) { focusedTransactionId = null }
+            FocusedCorrectionOverlay(
+                visible = focusedTransactionId != null,
+                transaction = lastShownTransaction,
+                onSubmit = { transactionId, note ->
+                    updatingTransactionId = transactionId
+                    dismissedIds = dismissedIds + transactionId
+                    onCorrectTransaction(transactionId, note)
+                },
+                onDismiss = { focusedTransactionId = null },
+            )
         }
     }
 }
@@ -463,76 +523,319 @@ private fun DashboardButton(untaggedCount: Int, modifier: Modifier = Modifier) {
     }
 }
 
-private val QUESTION_CARD_WIDTH = 230.dp
+private val TERMINAL_WIDTH = 230.dp
+private const val TERMINAL_STACK_SIZE = 3
+// Tall enough to clearly show a sliver of the card behind (its border, some real content) —
+// at 16dp this read as cramped/overlapping text rather than a deliberate stack of cards.
+private val TERMINAL_PEEK_HEIGHT = 34.dp
 
 /**
- * The on-device classifier couldn't resolve a transaction on its own — one short MCQ at a
- * time, in the free space bottom-left (the dials own bottom-right). Entirely optional to
- * answer: dismissing just hides it for this session, the question stays queued and reappears
- * next time the app is reopened. A `>`-prefixed option list matches the calendar block's own
- * convention for this kind of inline list.
+ * Every transaction is tagged automatically now — this is a stack of individual cards, newest
+ * at the front, rather than one box listing all of them at once. Older cards peek out above the
+ * front one (shrunk and dimmed a little per step back) just enough to read as "there's more
+ * behind this" without competing with it. Only the front card is interactive — the ones behind
+ * are mostly covered anyway.
  */
 @Composable
-private fun PendingQuestionCard(
-    question: ExpenseRepository.PendingQuestion,
-    queuedCount: Int,
-    onAnswer: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun TerminalFeed(
+    transactions: List<ExpenseRepository.Transaction>,
+    dismissedIds: Set<Long>,
+    updatingTransactionId: Long?,
+    onRequestFocus: (transactionId: Long) -> Unit,
+    onConfirm: (transactionId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (transactions.isEmpty()) return
+    val nonDismissed = transactions.filterNot { it.id in dismissedIds }
+    Box(modifier = modifier.width(TERMINAL_WIDTH), contentAlignment = Alignment.BottomCenter) {
+        // Every fetched transaction is composed here, not just the visible stack depth — a
+        // just-dismissed one (depth -1, filtered out of nonDismissed) still needs to render
+        // while its own exit animation plays. Composed back-to-front (highest depth first) so
+        // the front/newest card, composed last, naturally draws on top — no explicit
+        // z-ordering needed.
+        for (transaction in transactions.sortedByDescending { nonDismissed.indexOf(it) }) {
+            val depth = nonDismissed.indexOf(transaction)
+            val dismissed = depth == -1
+            if (!dismissed && depth >= TERMINAL_STACK_SIZE) continue
+            key(transaction.id) {
+                // Animated rather than a plain offset/graphicsLayer — when the stack reorders
+                // (a new transaction arrives, one gets dismissed and the rest settle forward)
+                // each card slides to its new depth instead of snapping there. A dismissed card
+                // needs to keep whatever depth it last had (not jump to the front) while its own
+                // exit transition plays, since `depth` itself goes to -1 the instant it's
+                // dismissed — remembered separately so the offset doesn't snap out from under it.
+                var lastKnownDepth by remember(transaction.id) { mutableStateOf(0) }
+                if (!dismissed) lastKnownDepth = depth
+                val effectiveDepth = if (dismissed) lastKnownDepth else depth
+                val peekOffset by animateDpAsState(
+                    targetValue = -(TERMINAL_PEEK_HEIGHT * effectiveDepth),
+                    animationSpec = tween(260, easing = FastOutSlowInEasing),
+                    label = "cardPeekOffset",
+                )
+                // Alpha-only depth cue — no scale. Scaling from the composable's center also
+                // shifts its apparent bottom edge inward, which made the front card look
+                // slightly misaligned against the ones peeking behind it; a flat stack with
+                // just a dimmer tint behind reads more cleanly anyway.
+                val depthAlpha by animateFloatAsState(1f - 0.2f * effectiveDepth, tween(260), label = "cardDepthAlpha")
+                AnimatedVisibility(
+                    visible = !dismissed,
+                    modifier = Modifier.align(Alignment.BottomCenter).offset(y = peekOffset),
+                    exit = shrinkVertically(tween(220), shrinkTowards = Alignment.Bottom) + fadeOut(tween(180)),
+                ) {
+                    TerminalCard(
+                        transaction = transaction,
+                        isFront = effectiveDepth == 0,
+                        isUpdating = transaction.id == updatingTransactionId,
+                        onRequestFocus = { onRequestFocus(transaction.id) },
+                        onConfirm = { onConfirm(transaction.id) },
+                        modifier = Modifier.graphicsLayer { alpha = depthAlpha },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalCard(
+    transaction: ExpenseRepository.Transaction,
+    isFront: Boolean,
+    isUpdating: Boolean,
+    onRequestFocus: () -> Unit,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val confirmed = transaction.resolvedBy == ResolvedBy.USER
+    // Nothing to confirm yet if the classifier hasn't produced a guess at all (still freshly
+    // synced and UNKNOWN) — confirming that would just lock in "UNKNOWN" as correct. The tick
+    // only appears once there's an actual guess behind it.
+    val hasGuess = transaction.kind != TransactionKind.UNKNOWN
+    // Pressing the tick dismisses the whole card immediately (the caller removes it from the
+    // stack the same way a text correction does) — there's no separate "button fades, card
+    // stays" state to track here anymore, just whether there's still something to confirm.
+
+    // Every card renders the same three rows regardless of depth — a shorter back card would
+    // end up entirely hidden behind a taller front one instead of peeking out above it. Only
+    // the front card actually responds to taps; the ones behind are inert.
     Column(
         modifier = modifier
-            .width(QUESTION_CARD_WIDTH)
-            .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = 0.5f)))
+            .width(TERMINAL_WIDTH)
+            .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = if (isFront) 0.5f else 0.3f)))
             .background(PureBlack)
             .padding(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.Top) {
             Text(
-                text = "${question.counterpartName} · ${formatExpenseAmount(question.amount)}",
+                text = "> ${transaction.counterpartName}  ${formatExpenseAmount(transaction.amount)}",
                 style = MaterialTheme.typography.bodySmall,
-                color = SubtextGrey,
+                color = PureWhite,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (queuedCount > 1) {
-                Text(
-                    text = "+${queuedCount - 1}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SubtextGrey,
-                    modifier = Modifier.padding(start = 6.dp),
+            if (!isUpdating && !confirmed && hasGuess) {
+                ConfirmButton(
+                    confirmed = false,
+                    onConfirm = onConfirm,
+                    interactive = isFront,
+                    modifier = Modifier.padding(start = 8.dp),
                 )
             }
-            Text(
-                text = "×",
-                style = MaterialTheme.typography.bodyMedium,
-                color = SubtextGrey,
-                modifier = Modifier
-                    .padding(start = 10.dp)
-                    .clickable(onClick = onDismiss),
-            )
+        }
+        AnimatedContent(
+            targetState = if (isUpdating) "updating…" else "[${transactionTag(transaction.kind, transaction.category)}]",
+            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+            label = "cardTag",
+            modifier = Modifier.padding(top = 4.dp),
+        ) { label ->
+            Text(text = label, style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
         }
         Text(
-            text = question.questionText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = PureWhite,
-            modifier = Modifier.padding(top = 8.dp),
+            text = "> what was this actually?",
+            style = MaterialTheme.typography.bodySmall,
+            color = SubtextGrey.copy(alpha = 0.5f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+                .clickable(enabled = isFront, onClick = onRequestFocus),
         )
-        Column(modifier = Modifier.padding(top = 8.dp)) {
-            question.options.forEach { option ->
+    }
+}
+
+/** A bordered icon button matching the dashboard's own ">" box — confirms the current auto-tag
+ * is correct, no LLM call needed. Fills in solid once confirmed, dims and stops responding to
+ * taps after that (there's nothing left to confirm). Shared with the expense dashboard's own
+ * transaction rows — same affordance, same meaning, in both places. */
+@Composable
+internal fun ConfirmButton(
+    confirmed: Boolean,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+    interactive: Boolean = true,
+) {
+    // Full white border + icon even before confirming — the dim-grey version this used to be
+    // read as decorative rather than as a button and was easy to miss entirely at a glance.
+    // Only the fill flips from black to white on confirm.
+    val fill by animateColorAsState(if (confirmed) PureWhite else PureBlack, tween(180), label = "confirmFill")
+    val iconTint by animateColorAsState(if (confirmed) PureBlack else PureWhite, tween(180), label = "confirmIconTint")
+    Box(
+        modifier = modifier
+            .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.7f)))
+            .background(fill)
+            .clickable(enabled = interactive && !confirmed, onClick = onConfirm)
+            .padding(horizontal = 7.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = if (confirmed) "Tag confirmed" else "Confirm tag",
+            tint = iconTint,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * Tapping a terminal entry's prompt lands here instead of editing in place: the rest of the
+ * screen dims (the same treatment the radial dial uses while open) and this card grows up into
+ * the center from where the terminal feed sits, auto-focused and keyboard up immediately. Enter
+ * submits, closes the keyboard, and the card shrinks back out the same way it came; tapping
+ * outside dismisses without submitting. [transaction] is kept non-null by the caller through the
+ * exit animation (it still needs to render while fading/scaling out) — [visible] is what
+ * actually drives the transition.
+ */
+@Composable
+private fun FocusedCorrectionOverlay(
+    visible: Boolean,
+    transaction: ExpenseRepository.Transaction?,
+    onSubmit: (transactionId: Long, note: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    fun closeKeyboardAndDismiss() {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+        onDismiss()
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(200)),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { closeKeyboardAndDismiss() },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Separate from the scrim's own fade so the card gets its own motion — growing up
+            // from roughly where the terminal feed sits rather than just popping into place.
+            AnimatedVisibility(
+                visible = visible,
+                enter = scaleIn(initialScale = 0.8f, animationSpec = tween(260, easing = FastOutSlowInEasing)) +
+                    slideInVertically(animationSpec = tween(260, easing = FastOutSlowInEasing)) { height -> height / 6 },
+                exit = scaleOut(targetScale = 0.8f, animationSpec = tween(200)) +
+                    slideOutVertically(animationSpec = tween(200)) { height -> height / 6 },
+            ) {
+                if (transaction != null) {
+                    FocusedCorrectionCard(
+                        transaction = transaction,
+                        visible = visible,
+                        onSubmit = { note -> onSubmit(transaction.id, note) },
+                        onClose = ::closeKeyboardAndDismiss,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FocusedCorrectionCard(
+    transaction: ExpenseRepository.Transaction,
+    visible: Boolean,
+    onSubmit: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    var input by remember(transaction.id) { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    Column(
+        modifier = Modifier
+            .width(TERMINAL_WIDTH)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}, // swallow taps so they don't fall through to the scrim above
+            )
+            .border(BorderStroke(1.dp, PureWhite.copy(alpha = 0.6f)))
+            .background(PureBlack)
+            .padding(16.dp),
+    ) {
+        Text(
+            text = "> ${transaction.counterpartName}  ${formatExpenseAmount(transaction.amount)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = PureWhite,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "[${transactionTag(transaction.kind, transaction.category)}]",
+            style = MaterialTheme.typography.bodySmall,
+            color = SubtextGrey,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Box(modifier = Modifier.padding(top = 10.dp)) {
+            if (input.isEmpty()) {
                 Text(
-                    text = "> $option",
+                    text = "> what was this actually?",
                     style = MaterialTheme.typography.bodySmall,
-                    color = SubtextGrey,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onAnswer(option) }
-                        .padding(vertical = 4.dp),
+                    color = SubtextGrey.copy(alpha = 0.5f),
                 )
             }
+            BasicTextField(
+                value = input,
+                onValueChange = { input = it },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = PureWhite),
+                cursorBrush = SolidColor(PureWhite),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    val note = input.trim()
+                    onClose()
+                    if (note.isNotEmpty()) onSubmit(note)
+                }),
+                decorationBox = { inner ->
+                    Row {
+                        Text(text = "> ", style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
+                        inner()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
+            )
+        }
+    }
+
+    // Only grabs focus on the way in — the exit animation re-renders this same composable with
+    // visible=false while it plays, and re-requesting focus then would reopen the keyboard right
+    // as everything is trying to close.
+    LaunchedEffect(visible) {
+        if (visible) {
+            focusRequester.requestFocus()
+            keyboardController?.show()
         }
     }
 }

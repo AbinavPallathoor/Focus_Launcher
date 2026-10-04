@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import androidx.core.content.ContextCompat
-import org.json.JSONArray
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -27,6 +26,7 @@ object ExpenseRepository {
         val timestamp: Long,
         val kind: TransactionKind,
         val category: ExpenseCategory?,
+        val resolvedBy: ResolvedBy,
     )
 
     data class DayTotal(val dayStartMillis: Long, val total: Double)
@@ -34,18 +34,13 @@ object ExpenseRepository {
     /** Net balance with one person: positive = they owe the user, negative = user owes them. */
     data class PersonBalance(val name: String, val netAmount: Double)
 
-    data class PendingQuestion(
-        val id: Long,
-        val transactionId: Long,
-        val questionText: String,
-        val options: List<String>,
-        val counterpartName: String,
-        val amount: Double,
-    )
-
     private const val PREFS = "expense_tracker"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_LAST_SYNC_TS = "last_sync_ts"
+
+    // Guards classifyUnknownTransactions against running concurrently with itself — see its
+    // own doc comment for why that matters.
+    private val classifyLock = Any()
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -105,6 +100,31 @@ object ExpenseRepository {
         }
     }
 
+    /**
+     * A remembered kind only applies to transactions in the direction it was actually learned
+     * from. A person remembered as LENT (a debit — the user paid them) says nothing about what a
+     * *credit* from that same person means; blindly reusing it would tag every repayment from
+     * them as another LENT instead of ever reaching the LLM's balance-aware REPAYMENT_IN guess.
+     * Plain merchants (EXPENSE/INCOME/SUBSCRIPTION etc.) are effectively one-directional anyway,
+     * so this never affects them in practice.
+     */
+    private fun TransactionKind.matchesDirection(direction: TransactionDirection): Boolean = when (this) {
+        TransactionKind.EXPENSE, TransactionKind.LENT, TransactionKind.REPAYMENT_OUT -> direction == TransactionDirection.DEBIT
+        TransactionKind.INCOME, TransactionKind.BORROWED, TransactionKind.REPAYMENT_IN -> direction == TransactionDirection.CREDIT
+        TransactionKind.UNKNOWN -> true
+    }
+
+    // The dashboard command model's own "kind" guess is reliable (it's the same judgment call
+    // the per-transaction classifier already makes well); its "direction" field for a manually
+    // described ADD is not — greedy decoding kept producing CREDIT for plainly-spent money
+    // ("add 100 for coffee") even after the prompt spelled out the rule. Deriving direction from
+    // kind instead sidesteps the unreliable field entirely rather than continuing to fight it.
+    private fun TransactionKind.canonicalDirection(): TransactionDirection = when (this) {
+        TransactionKind.EXPENSE, TransactionKind.LENT, TransactionKind.REPAYMENT_OUT -> TransactionDirection.DEBIT
+        TransactionKind.INCOME, TransactionKind.BORROWED, TransactionKind.REPAYMENT_IN -> TransactionDirection.CREDIT
+        TransactionKind.UNKNOWN -> TransactionDirection.DEBIT
+    }
+
     private fun recordTransaction(db: SQLiteDatabase, smsId: String, body: String, date: Long, parsed: ParsedTransaction) {
         val memory = MemoryStore.lookup(db, parsed.counterpartName)
         val values = ContentValues().apply {
@@ -114,7 +134,7 @@ object ExpenseRepository {
             put("direction", parsed.direction.name)
             put("raw_body", body)
             put("timestamp", date)
-            if (memory != null) {
+            if (memory != null && memory.kind.matchesDirection(parsed.direction)) {
                 put("kind", memory.kind.name)
                 put("category", memory.category?.name)
                 put("confidence", 1.0)
@@ -128,24 +148,70 @@ object ExpenseRepository {
         db.insertWithOnConflict("transactions", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
+    /**
+     * A concurrent, slow (LLM-backed) auto-classification pass can still be in flight for the
+     * same transaction when the user explicitly corrects or confirms it — without this guard,
+     * that stale pass's own write can land *after* the user's and silently clobber it back.
+     * User-resolved writes are absolute; an auto (MEMORY/LLM) write only applies if the
+     * transaction hasn't already been resolved by the user in the meantime.
+     */
     private fun applyGuessToTransaction(
         db: SQLiteDatabase, transactionId: Long, kind: TransactionKind,
         category: ExpenseCategory?, confidence: Float, resolvedBy: ResolvedBy,
     ) {
+        val whereClause = if (resolvedBy == ResolvedBy.USER) {
+            "id = ?"
+        } else {
+            "id = ? AND resolved_by != 'USER'"
+        }
         db.execSQL(
-            "UPDATE transactions SET kind = ?, category = ?, confidence = ?, resolved_by = ? WHERE id = ?",
+            "UPDATE transactions SET kind = ?, category = ?, confidence = ?, resolved_by = ? WHERE $whereClause",
             arrayOf(kind.name, category?.name, confidence.toDouble(), resolvedBy.name, transactionId.toString())
         )
     }
 
+    // Shared by getDebtLedger (grouped, all counterparts) and personNetBalance (one counterpart):
+    // positive = they owe the user, negative = the user owes them. A repayment doesn't need to
+    // match any single past transaction's amount — paying back several loans at once nets out
+    // exactly the same as paying them back one at a time.
+    private const val NET_BALANCE_EXPR = """
+        SUM(CASE WHEN kind = 'LENT' THEN amount ELSE 0 END)
+      - SUM(CASE WHEN kind = 'REPAYMENT_IN' THEN amount ELSE 0 END)
+      - SUM(CASE WHEN kind = 'BORROWED' THEN amount ELSE 0 END)
+      + SUM(CASE WHEN kind = 'REPAYMENT_OUT' THEN amount ELSE 0 END)
+    """
+
+    /** The running balance with one specific counterpart — the context the classifier needs to
+     * recognize a credit from them as a repayment rather than guessing INCOME/EXPENSE blind. */
+    private fun personNetBalance(db: SQLiteDatabase, counterpartName: String): Double {
+        val key = MemoryStore.normalize(counterpartName)
+        db.rawQuery(
+            """SELECT $NET_BALANCE_EXPR FROM transactions
+               WHERE counterpart_name = ? AND kind IN ('LENT', 'BORROWED', 'REPAYMENT_IN', 'REPAYMENT_OUT')""",
+            arrayOf(key)
+        ).use { cursor ->
+            cursor.moveToFirst()
+            return cursor.getDouble(0)
+        }
+    }
+
     /**
-     * Runs the on-device classifier against up to [limit] UNKNOWN transactions, oldest first.
-     * Blocking and potentially slow (real LLM inference per genuinely-new counterpart) — callers
-     * must invoke this from a background thread/coroutine, never the main thread. A counterpart
-     * that already has a memory hit (e.g. classified earlier in this same batch, or manually
-     * since the transaction was recorded) skips the LLM entirely.
+     * Runs the on-device classifier against up to [limit] UNKNOWN transactions, oldest first,
+     * and applies the guess immediately — no follow-up questions, the total/breakdown reflects
+     * every transaction right away. Blocking and potentially slow (real LLM inference per
+     * genuinely-new counterpart) — callers must invoke this from a background thread/coroutine,
+     * never the main thread. A counterpart that already has a memory hit (e.g. classified
+     * earlier in this same batch) skips the LLM entirely.
+     *
+     * Synchronized process-wide: this gets called both from the app's own resume and from the
+     * SMS broadcast receiver's WorkManager job, and those can legitimately overlap (an SMS
+     * arriving right as the app comes to the foreground). Without this, two concurrent passes
+     * would both pick up the same UNKNOWN transaction, run the LLM on it twice, and whichever
+     * one finishes last would win — occasionally landing after a user correction and silently
+     * overwriting it (the resolved_by='USER' guard in [applyGuessToTransaction] is the backstop
+     * for that; this lock is what stops the wasted double inference in the first place).
      */
-    fun classifyUnknownTransactions(context: Context, limit: Int = 5) {
+    fun classifyUnknownTransactions(context: Context, limit: Int = 5): Unit = synchronized(classifyLock) {
         val db = ExpenseDbHelper(context).writableDatabase
         try {
             val candidates = mutableListOf<Pair<Long, ParsedTransaction>>()
@@ -168,65 +234,14 @@ object ExpenseRepository {
 
             for ((transactionId, parsed) in candidates) {
                 val memoryHit = MemoryStore.lookup(db, parsed.counterpartName)
-                if (memoryHit != null) {
+                if (memoryHit != null && memoryHit.kind.matchesDirection(parsed.direction)) {
                     applyGuessToTransaction(db, transactionId, memoryHit.kind, memoryHit.category, 1.0f, ResolvedBy.MEMORY)
                     continue
                 }
-                val result = TransactionClassifier.classify(context, parsed, examples) ?: continue
-                if (result.questions.isEmpty()) {
-                    applyGuessToTransaction(db, transactionId, result.guess.kind, result.guess.category, result.guess.confidence, ResolvedBy.LLM)
-                    MemoryStore.remember(db, parsed.counterpartName, result.guess.kind, result.guess.category, result.guess.isPerson)
-                } else {
-                    result.questions.forEachIndexed { index, question ->
-                        val values = ContentValues().apply {
-                            put("transaction_id", transactionId)
-                            put("question_index", index)
-                            put("question_text", question.text)
-                            put("options_json", JSONArray(question.options).toString())
-                        }
-                        db.insert("pending_questions", null, values)
-                    }
-                }
-            }
-        } finally {
-            db.close()
-        }
-    }
-
-    fun getPendingQuestionCount(context: Context): Int {
-        val db = ExpenseDbHelper(context).readableDatabase
-        try {
-            db.rawQuery("SELECT COUNT(*) FROM pending_questions WHERE answered_option IS NULL", null).use { cursor ->
-                cursor.moveToFirst()
-                return cursor.getInt(0)
-            }
-        } finally {
-            db.close()
-        }
-    }
-
-    /** The oldest unanswered question across all transactions — what the home screen card shows. */
-    fun getNextPendingQuestion(context: Context): PendingQuestion? {
-        val db = ExpenseDbHelper(context).readableDatabase
-        try {
-            db.rawQuery(
-                """SELECT pq.id, pq.transaction_id, pq.question_text, pq.options_json, t.counterpart_name, t.amount
-                   FROM pending_questions pq JOIN transactions t ON t.id = pq.transaction_id
-                   WHERE pq.answered_option IS NULL
-                   ORDER BY pq.transaction_id ASC, pq.question_index ASC
-                   LIMIT 1""",
-                null
-            ).use { cursor ->
-                if (!cursor.moveToFirst()) return null
-                val options = JSONArray(cursor.getString(3)).let { arr -> (0 until arr.length()).map { arr.getString(it) } }
-                return PendingQuestion(
-                    id = cursor.getLong(0),
-                    transactionId = cursor.getLong(1),
-                    questionText = cursor.getString(2),
-                    options = options,
-                    counterpartName = cursor.getString(4),
-                    amount = cursor.getDouble(5),
-                )
+                val priorBalance = personNetBalance(db, parsed.counterpartName)
+                val guess = TransactionClassifier.classify(context, parsed, examples, priorBalance) ?: continue
+                applyGuessToTransaction(db, transactionId, guess.kind, guess.category, guess.confidence, ResolvedBy.LLM)
+                MemoryStore.remember(db, parsed.counterpartName, guess.kind, guess.category, guess.isPerson)
             }
         } finally {
             db.close()
@@ -234,67 +249,119 @@ object ExpenseRepository {
     }
 
     /**
-     * Records the chosen answer. Once every question queued for that transaction has an answer,
-     * re-runs the classifier with the full Q&A transcript appended so it can synthesize a final
-     * answer instead of asking anything further — blocking/slow like [classifyUnknownTransactions],
-     * so callers must invoke this off the main thread.
+     * The user's free-text note on why the automatic tag for [transactionId] was wrong (e.g.
+     * "this was lending money to Raj") — re-runs the classifier trusting the note over its own
+     * assumption, applies the corrected guess, and remembers it so the same counterpart is
+     * never misclassified again. Blocking/slow like [classifyUnknownTransactions], so callers
+     * must invoke this off the main thread.
      */
-    fun answerPendingQuestion(context: Context, questionId: Long, answer: String) {
+    fun correctTransaction(context: Context, transactionId: Long, note: String) {
         val db = ExpenseDbHelper(context).writableDatabase
         try {
-            db.execSQL("UPDATE pending_questions SET answered_option = ? WHERE id = ?", arrayOf(answer, questionId.toString()))
-
-            val transactionId = db.rawQuery(
-                "SELECT transaction_id FROM pending_questions WHERE id = ?", arrayOf(questionId.toString())
-            ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else return }
-
-            val unanswered = db.rawQuery(
-                "SELECT COUNT(*) FROM pending_questions WHERE transaction_id = ? AND answered_option IS NULL",
-                arrayOf(transactionId.toString())
-            ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
-            if (unanswered > 0) return // more questions still queued for this same transaction
-
-            val qaHistory = db.rawQuery(
-                "SELECT question_text, answered_option FROM pending_questions WHERE transaction_id = ? ORDER BY question_index",
-                arrayOf(transactionId.toString())
-            ).use { cursor ->
-                val list = mutableListOf<Pair<String, String>>()
-                while (cursor.moveToNext()) list.add(cursor.getString(0) to cursor.getString(1))
-                list
-            }
             val parsed = db.rawQuery(
                 "SELECT amount, counterpart_name, direction FROM transactions WHERE id = ?", arrayOf(transactionId.toString())
             ).use { cursor ->
                 if (!cursor.moveToFirst()) return
                 ParsedTransaction(cursor.getDouble(0), cursor.getString(1), TransactionDirection.valueOf(cursor.getString(2)))
             }
-
             val examples = MemoryStore.recentExamples(db)
-            val result = TransactionClassifier.classify(context, parsed, examples, qaHistory)
-            if (result != null) {
-                applyGuessToTransaction(db, transactionId, result.guess.kind, result.guess.category, maxOf(result.guess.confidence, 0.9f), ResolvedBy.USER)
-                MemoryStore.remember(db, parsed.counterpartName, result.guess.kind, result.guess.category, result.guess.isPerson)
-            }
-            db.delete("pending_questions", "transaction_id = ?", arrayOf(transactionId.toString()))
+            val priorBalance = personNetBalance(db, parsed.counterpartName)
+            val guess = TransactionClassifier.reclassifyWithNote(context, parsed, examples, priorBalance, note) ?: return
+            applyGuessToTransaction(db, transactionId, guess.kind, guess.category, maxOf(guess.confidence, 0.9f), ResolvedBy.USER)
+            MemoryStore.remember(db, parsed.counterpartName, guess.kind, guess.category, guess.isPerson)
         } finally {
             db.close()
         }
     }
 
     /**
-     * Manually classifies every transaction from [counterpartName] (including past ones) and
-     * remembers the decision so future transactions from them are instant. This is the
-     * fallback path for whenever the automatic classifier doesn't have an answer yet.
+     * The dashboard's free-text command bar — one instruction that can add a transaction the
+     * SMS pipeline never saw (e.g. cash), delete an existing one, or retag one, all via the
+     * same on-device model. Interprets against the dashboard's own most-recent transactions so
+     * "remove the bookstore one" can resolve to a real row. A command the model can't map to
+     * anything actionable is silently a no-op (ResolvedBy stays whatever it already was) rather
+     * than guessing. Blocking/slow (LLM inference) — callers must invoke this off the main
+     * thread.
      */
-    fun classify(context: Context, counterpartName: String, kind: TransactionKind, category: ExpenseCategory?, isPerson: Boolean) {
+    fun runDashboardCommand(context: Context, command: String) {
         val db = ExpenseDbHelper(context).writableDatabase
         try {
-            MemoryStore.remember(db, counterpartName, kind, category, isPerson)
-            val key = MemoryStore.normalize(counterpartName)
+            val recent = mutableListOf<Transaction>()
+            db.rawQuery(
+                """SELECT id, amount, counterpart_name, direction, timestamp, kind, category, resolved_by
+                   FROM transactions ORDER BY timestamp DESC LIMIT 20""",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    recent.add(
+                        Transaction(
+                            id = cursor.getLong(0),
+                            amount = cursor.getDouble(1),
+                            counterpartName = cursor.getString(2),
+                            direction = TransactionDirection.valueOf(cursor.getString(3)),
+                            timestamp = cursor.getLong(4),
+                            kind = TransactionKind.fromStorage(cursor.getString(5)),
+                            category = ExpenseCategory.fromStorage(cursor.getString(6)),
+                            resolvedBy = ResolvedBy.fromStorage(cursor.getString(7)),
+                        )
+                    )
+                }
+            }
+            val result = DashboardCommandInterpreter.interpret(context, command, recent) ?: return
+            when (result.action) {
+                DashboardCommandInterpreter.Action.ADD -> {
+                    val values = ContentValues().apply {
+                        put("sms_id", "manual-${System.currentTimeMillis()}-${(0..999999).random()}")
+                        put("amount", result.amount)
+                        put("counterpart_name", MemoryStore.normalize(result.counterpartName))
+                        put("direction", result.kind.canonicalDirection().name)
+                        put("raw_body", "Added manually via dashboard command: \"$command\"")
+                        put("timestamp", System.currentTimeMillis())
+                        put("kind", result.kind.name)
+                        put("category", result.category?.name)
+                        put("confidence", 1.0)
+                        put("resolved_by", ResolvedBy.USER.name)
+                    }
+                    db.insert("transactions", null, values)
+                }
+                DashboardCommandInterpreter.Action.REMOVE -> {
+                    val target = recent.getOrNull(result.targetIndex - 1) ?: return
+                    db.delete("transactions", "id = ?", arrayOf(target.id.toString()))
+                }
+                DashboardCommandInterpreter.Action.MODIFY -> {
+                    val target = recent.getOrNull(result.targetIndex - 1) ?: return
+                    applyGuessToTransaction(db, target.id, result.kind, result.category, 1.0f, ResolvedBy.USER)
+                    val isPerson = MemoryStore.lookup(db, target.counterpartName)?.isPerson ?: false
+                    MemoryStore.remember(db, target.counterpartName, result.kind, result.category, isPerson)
+                }
+                DashboardCommandInterpreter.Action.NONE -> Unit
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * The user says the current auto-tag is already correct — no LLM call needed, just
+     * reinforces it (full confidence, resolved by the user) and strengthens the memory entry
+     * so this counterpart's pattern is trusted more over time.
+     */
+    fun confirmTransaction(context: Context, transactionId: Long) {
+        val db = ExpenseDbHelper(context).writableDatabase
+        try {
+            val row = db.rawQuery(
+                "SELECT counterpart_name, kind, category FROM transactions WHERE id = ?", arrayOf(transactionId.toString())
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                Triple(cursor.getString(0), TransactionKind.fromStorage(cursor.getString(1)), ExpenseCategory.fromStorage(cursor.getString(2)))
+            }
+            val (counterpart, kind, category) = row
             db.execSQL(
-                "UPDATE transactions SET kind = ?, category = ?, confidence = 1.0, resolved_by = ? WHERE counterpart_name = ?",
-                arrayOf(kind.name, category?.name, ResolvedBy.USER.name, key)
+                "UPDATE transactions SET confidence = 1.0, resolved_by = ? WHERE id = ?",
+                arrayOf(ResolvedBy.USER.name, transactionId.toString())
             )
+            val isPerson = MemoryStore.lookup(db, counterpart)?.isPerson ?: false
+            MemoryStore.remember(db, counterpart, kind, category, isPerson)
         } finally {
             db.close()
         }
@@ -413,7 +480,7 @@ object ExpenseRepository {
         try {
             val result = mutableListOf<Transaction>()
             db.rawQuery(
-                """SELECT id, amount, counterpart_name, direction, timestamp, kind, category
+                """SELECT id, amount, counterpart_name, direction, timestamp, kind, category, resolved_by
                    FROM transactions ORDER BY timestamp DESC LIMIT ?""",
                 arrayOf(limit.toString())
             ).use { cursor ->
@@ -427,6 +494,7 @@ object ExpenseRepository {
                             timestamp = cursor.getLong(4),
                             kind = TransactionKind.fromStorage(cursor.getString(5)),
                             category = ExpenseCategory.fromStorage(cursor.getString(6)),
+                            resolvedBy = ResolvedBy.fromStorage(cursor.getString(7)),
                         )
                     )
                 }
@@ -448,11 +516,7 @@ object ExpenseRepository {
         try {
             val result = mutableListOf<PersonBalance>()
             db.rawQuery(
-                """SELECT counterpart_name,
-                          SUM(CASE WHEN kind = 'LENT' THEN amount ELSE 0 END)
-                        - SUM(CASE WHEN kind = 'REPAYMENT_IN' THEN amount ELSE 0 END)
-                        - SUM(CASE WHEN kind = 'BORROWED' THEN amount ELSE 0 END)
-                        + SUM(CASE WHEN kind = 'REPAYMENT_OUT' THEN amount ELSE 0 END) AS net
+                """SELECT counterpart_name, $NET_BALANCE_EXPR AS net
                    FROM transactions
                    WHERE kind IN ('LENT', 'BORROWED', 'REPAYMENT_IN', 'REPAYMENT_OUT')
                    GROUP BY counterpart_name

@@ -11,15 +11,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +29,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Restaurant
@@ -42,18 +44,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.ExpenseCategory
 import com.focuslauncher.app.ExpenseRepository
+import com.focuslauncher.app.ResolvedBy
 import com.focuslauncher.app.TransactionKind
+import com.focuslauncher.app.transactionTag
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -72,8 +80,9 @@ internal fun categoryIcon(category: ExpenseCategory): ImageVector = when (catego
 
 /**
  * SMS-derived spend dashboard: today's total, a per-category breakdown, a line graph of the
- * last two weeks, and a prompt to tag any merchant seen for the first time. Categorizing a
- * merchant here retroactively re-tags all of its past transactions too.
+ * last two weeks, who owes who, and the recent transaction log. Every transaction is tagged
+ * automatically by the on-device classifier; tapping one here opens an inline prompt to retag it
+ * directly, the same correction path the home screen's terminal feed uses.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -81,9 +90,12 @@ fun ExpenseTrackerScreen(
     todayTotal: Double,
     categoryTotals: Map<ExpenseCategory, Double>,
     dailyTotals: List<ExpenseRepository.DayTotal>,
-    untaggedMerchants: List<String>,
     recentTransactions: List<ExpenseRepository.Transaction>,
-    onTagMerchant: (String, ExpenseCategory) -> Unit,
+    debtLedger: List<ExpenseRepository.PersonBalance>,
+    isProcessingCommand: Boolean,
+    onCorrectTransaction: (transactionId: Long, note: String) -> Unit,
+    onConfirmTransaction: (transactionId: Long) -> Unit,
+    onCommand: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     BackHandler(onBack = onClose)
@@ -96,6 +108,14 @@ fun ExpenseTrackerScreen(
     ) {
         item {
             Text(text = "Expense Tracker", style = MaterialTheme.typography.bodyLarge, color = PureWhite)
+        }
+
+        item {
+            DashboardCommandBar(
+                isProcessing = isProcessingCommand,
+                onCommand = onCommand,
+                modifier = Modifier.padding(top = 20.dp),
+            )
         }
 
         item {
@@ -121,14 +141,10 @@ fun ExpenseTrackerScreen(
             }
         }
 
-        if (untaggedMerchants.isNotEmpty()) {
-            item { SectionHeader("Tag new merchants") }
-            items(untaggedMerchants, key = { it }) { merchant ->
-                MerchantTagRow(
-                    merchant = merchant,
-                    onTag = { category -> onTagMerchant(merchant, category) },
-                    modifier = Modifier.animateItemPlacement(tween(220)),
-                )
+        if (debtLedger.isNotEmpty()) {
+            item { SectionHeader("Owing") }
+            items(debtLedger, key = { it.name }) { person ->
+                DebtRow(person, modifier = Modifier.animateItemPlacement(tween(220)))
             }
         }
 
@@ -160,8 +176,98 @@ fun ExpenseTrackerScreen(
         if (recentTransactions.isNotEmpty()) {
             item { SectionHeader("Recent") }
             items(recentTransactions, key = { it.id }) { transaction ->
-                TransactionRow(transaction, modifier = Modifier.animateItemPlacement(tween(220)))
+                TransactionRow(
+                    transaction = transaction,
+                    onCorrect = { note -> onCorrectTransaction(transaction.id, note) },
+                    onConfirm = { onConfirmTransaction(transaction.id) },
+                    modifier = Modifier.animateItemPlacement(tween(220)),
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun DebtRow(person: ExpenseRepository.PersonBalance, modifier: Modifier = Modifier) {
+    val owesUser = person.netAmount > 0
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            text = person.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = PureWhite,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = if (owesUser) "owes you ${formatAmount(person.netAmount)}" else "you owe ${formatAmount(-person.netAmount)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = SubtextGrey,
+        )
+    }
+}
+
+/**
+ * One free-text instruction to the on-device model, which can add a transaction the SMS
+ * pipeline never saw (cash, say), delete one, or retag one — interpreted against the dashboard's
+ * own recent list. Clears immediately on submit; "thinking…" stands in for the tag/total values
+ * briefly changing underneath it rather than blocking the input itself.
+ */
+@Composable
+private fun DashboardCommandBar(
+    isProcessing: Boolean,
+    onCommand: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var input by remember { mutableStateOf("") }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(BorderStroke(1.dp, SubtextGrey.copy(alpha = 0.4f)))
+            .padding(12.dp),
+    ) {
+        Box {
+            if (input.isEmpty()) {
+                Text(
+                    text = "> add, remove, or retag something…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SubtextGrey.copy(alpha = 0.5f),
+                )
+            }
+            BasicTextField(
+                value = input,
+                onValueChange = { input = it },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = PureWhite),
+                cursorBrush = SolidColor(PureWhite),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    val command = input.trim()
+                    if (command.isNotEmpty()) {
+                        onCommand(command)
+                        input = ""
+                    }
+                }),
+                decorationBox = { inner ->
+                    Row {
+                        Text(text = "> ", style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
+                        inner()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (isProcessing) {
+            Text(
+                text = "thinking…",
+                style = MaterialTheme.typography.bodySmall,
+                color = SubtextGrey,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }
@@ -182,41 +288,6 @@ private fun SectionHeader(title: String) {
                 .height(1.dp)
                 .background(SubtextGrey.copy(alpha = 0.25f))
         )
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun MerchantTagRow(merchant: String, onTag: (ExpenseCategory) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.padding(top = 14.dp)) {
-        Text(
-            text = merchant,
-            style = MaterialTheme.typography.bodyLarge,
-            color = PureWhite,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ExpenseCategory.entries.forEach { category ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onTag(category) },
-                ) {
-                    Icon(
-                        imageVector = categoryIcon(category),
-                        contentDescription = null,
-                        tint = SubtextGrey,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = category.label, style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
-                }
-            }
-        }
     }
 }
 
@@ -310,33 +381,89 @@ private fun SpendingLineGraph(dailyTotals: List<ExpenseRepository.DayTotal>, mod
     }
 }
 
+/**
+ * Tapping a row opens an inline "what was this actually?" prompt right below it — the same
+ * free-text retagging the home screen's terminal feed offers, available here too for anything
+ * that needs fixing after the fact rather than the moment it shows up.
+ */
 @Composable
-private fun TransactionRow(transaction: ExpenseRepository.Transaction, modifier: Modifier = Modifier) {
+private fun TransactionRow(
+    transaction: ExpenseRepository.Transaction,
+    onCorrect: (String) -> Unit,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val dateFormat = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
-    Row(
+    var expanded by remember { mutableStateOf(false) }
+    var input by remember { mutableStateOf("") }
+
+    Column(
         modifier = modifier
             .fillMaxWidth()
+            .clickable { expanded = !expanded }
             .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = transaction.counterpartName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = PureWhite,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val statusLabel = transaction.category?.label
-                ?: transaction.kind.takeIf { it != TransactionKind.UNKNOWN }?.label
-                ?: "Unclassified"
-            Text(
-                text = "$statusLabel · ${dateFormat.format(Date(transaction.timestamp))}",
-                style = MaterialTheme.typography.bodySmall,
-                color = SubtextGrey,
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = transaction.counterpartName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = PureWhite,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val tag = transactionTag(transaction.kind, transaction.category)
+                Text(
+                    text = "$tag · ${dateFormat.format(Date(transaction.timestamp))}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SubtextGrey,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(text = formatAmount(transaction.amount), style = MaterialTheme.typography.bodyMedium, color = PureWhite)
+            // Nothing to confirm yet if the classifier hasn't produced a guess at all — same
+            // guard as the home screen's terminal feed.
+            if (transaction.kind != TransactionKind.UNKNOWN) {
+                ConfirmButton(
+                    confirmed = transaction.resolvedBy == ResolvedBy.USER,
+                    onConfirm = onConfirm,
+                    modifier = Modifier.padding(start = 10.dp),
+                )
+            }
         }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text = formatAmount(transaction.amount), style = MaterialTheme.typography.bodyMedium, color = PureWhite)
+        if (expanded) {
+            Box(modifier = Modifier.padding(top = 8.dp)) {
+                if (input.isEmpty()) {
+                    Text(
+                        text = "> what was this actually?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SubtextGrey.copy(alpha = 0.5f),
+                    )
+                }
+                BasicTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = PureWhite),
+                    cursorBrush = SolidColor(PureWhite),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        val note = input.trim()
+                        if (note.isNotEmpty()) {
+                            onCorrect(note)
+                            input = ""
+                        }
+                        expanded = false
+                    }),
+                    decorationBox = { inner ->
+                        Row {
+                            Text(text = "> ", style = MaterialTheme.typography.bodySmall, color = SubtextGrey)
+                            inner()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }

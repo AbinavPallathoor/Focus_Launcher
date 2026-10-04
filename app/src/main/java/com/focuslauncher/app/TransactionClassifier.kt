@@ -1,7 +1,6 @@
 package com.focuslauncher.app
 
 import android.content.Context
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -10,48 +9,58 @@ import org.json.JSONObject
  * prompt from the user's own prior answers as few-shot examples, runs it through the
  * grammar-constrained LlamaEngine, and re-validates every field in the result against the real
  * enums regardless of what the grammar already guarantees — the model's output is always a
- * draft, never trusted blindly.
+ * draft, never trusted blindly. Every transaction is auto-tagged immediately with no follow-up
+ * questions; a wrong guess is fixed afterward with a free-text note via [reclassifyWithNote].
  */
 object TransactionClassifier {
     data class Guess(val kind: TransactionKind, val category: ExpenseCategory?, val isPerson: Boolean, val confidence: Float)
-    data class Question(val text: String, val options: List<String>)
-    data class ClassificationResult(val guess: Guess, val questions: List<Question>)
 
-    private const val MAX_QUESTIONS = 4
-    // The schema's own JSON is compact (a guess, a confidence, up to 4 short questions) — this
-    // is a hard ceiling in case the grammar ever lets generation run past a complete object,
-    // not the expected length.
-    private const val MAX_TOKENS = 220
+    // The schema's own JSON is a single flat object (kind, category, isPerson, confidence) —
+    // this is a hard ceiling in case the grammar ever lets generation run past a complete
+    // object, not the expected length.
+    private const val MAX_TOKENS = 40
 
     /**
      * Null means "couldn't classify right now" (model not downloaded, failed to load, bad
-     * output) — the transaction stays UNKNOWN and can be retried later or classified manually.
-     * [qaHistory] (question asked -> option the user picked) is only non-empty when this is a
-     * follow-up call after the user has answered every question from a first pass — in that
-     * case the model is told to give its final answer rather than ask anything further.
+     * output) — the transaction stays UNKNOWN and is retried on the next sync/resume.
+     * [priorBalance] is the user's running balance with this counterpart (positive = they owe
+     * the user) — the signal that lets a credit from someone the user previously lent money to
+     * be recognized as a repayment instead of guessed as plain income.
      */
     fun classify(
         context: Context,
         transaction: ParsedTransaction,
         examples: List<MemoryStore.MemoryEntry>,
-        qaHistory: List<Pair<String, String>> = emptyList(),
-    ): ClassificationResult? {
-        if (!ensureLoaded(context)) return null
-        val raw = LlamaEngine.generate(buildPrompt(transaction, examples, qaHistory), MAX_TOKENS) ?: return null
+        priorBalance: Double,
+    ): Guess? {
+        if (!LlamaModelLoader.ensureLoaded(context)) return null
+        val grammar = LlamaModelLoader.readGrammar(context, "classification_schema.gbnf")
+        val raw = LlamaEngine.generate(buildPrompt(transaction, examples, priorBalance, userNote = null), MAX_TOKENS, grammar) ?: return null
         return parseAndValidate(raw)
     }
 
-    private fun ensureLoaded(context: Context): Boolean {
-        if (LlamaEngine.isLoaded()) return true
-        if (!ModelDownloader.isModelReady(context)) return false
-        val grammar = context.assets.open("classification_schema.gbnf").bufferedReader().use { it.readText() }
-        return LlamaEngine.load(ModelDownloader.modelFile(context).absolutePath, grammar)
+    /**
+     * The automatic guess was wrong — re-runs with the user's own words as the deciding signal,
+     * trusted over whatever the model would otherwise assume.
+     */
+    fun reclassifyWithNote(
+        context: Context,
+        transaction: ParsedTransaction,
+        examples: List<MemoryStore.MemoryEntry>,
+        priorBalance: Double,
+        userNote: String,
+    ): Guess? {
+        if (!LlamaModelLoader.ensureLoaded(context)) return null
+        val grammar = LlamaModelLoader.readGrammar(context, "classification_schema.gbnf")
+        val raw = LlamaEngine.generate(buildPrompt(transaction, examples, priorBalance, userNote), MAX_TOKENS, grammar) ?: return null
+        return parseAndValidate(raw)
     }
 
     private fun buildPrompt(
         transaction: ParsedTransaction,
         examples: List<MemoryStore.MemoryEntry>,
-        qaHistory: List<Pair<String, String>>,
+        priorBalance: Double,
+        userNote: String?,
     ): String {
         val exampleLines = if (examples.isEmpty()) {
             "(none yet)"
@@ -62,18 +71,30 @@ object TransactionClassifier {
                 "- ${e.normalizedName} ($who) -> ${e.kind.name}$categoryPart"
             }
         }
-        val instructions = if (qaHistory.isEmpty()) {
+        // The debt signal: a repayment doesn't have to match any one past transaction's amount —
+        // someone settling several loans at once is still just a REPAYMENT_IN/OUT. A credit with
+        // no outstanding balance (a monthly allowance, salary, a one-off refund) should default
+        // to INCOME rather than being guessed as a repayment that doesn't actually exist.
+        val balanceContext = when {
+            priorBalance > 0.5 -> "This person currently owes the user ₹${"%.0f".format(priorBalance)} " +
+                "from past lending. A credit from them is very likely a repayment (REPAYMENT_IN) — " +
+                "even if the amount doesn't exactly match one past transaction, they may be settling " +
+                "several at once."
+            priorBalance < -0.5 -> "The user currently owes this person ₹${"%.0f".format(-priorBalance)} " +
+                "from past borrowing. A debit to them is very likely the user paying them back " +
+                "(REPAYMENT_OUT)."
+            else -> "No outstanding balance with this counterpart. Do not guess REPAYMENT_IN or " +
+                "REPAYMENT_OUT here — an unexplained credit with no prior debt is INCOME (e.g. an " +
+                "allowance, salary, or refund), not a repayment."
+        }
+        val noteInstruction = if (userNote == null) {
             """Set "isPerson" true only if the counterpart looks like a person's name, not a
-               business. If confident, return "questions": []. If genuinely ambiguous (e.g.
-               could be an ordinary purchase or could be paid for someone else), ask up to 4
-               short multiple-choice questions (2-4 options each) that would resolve it."""
+               business. Give your single best guess even if unsure — never leave this
+               unresolved."""
         } else {
-            val qaLines = qaHistory.joinToString("\n") { (q, a) -> "- Q: $q\n  A: $a" }
-            """You already asked the user these questions and they answered:
-               $qaLines
-
-               Give your FINAL classification now using these answers. Return "questions": []
-               — do not ask anything further."""
+            """The automatic guess for this transaction was wrong. The user says what it
+               actually was: "$userNote". Trust the user's words over any assumption and
+               classify accordingly."""
         }
         return """
             You classify one bank SMS transaction for a personal expense tracker. Respond with
@@ -82,45 +103,42 @@ object TransactionClassifier {
             Valid kinds: EXPENSE (ordinary spend), LENT (user paid for someone else, they owe
             the user back), BORROWED (someone covered the user, user owes them), REPAYMENT_IN
             (a person paying the user back for something lent), REPAYMENT_OUT (user paying a
-            person back for something borrowed), INCOME (salary, refund, unrelated to a person).
+            person back for something borrowed), INCOME (salary, refund, allowance, unrelated to
+            a person).
             Valid categories (EXPENSE only, else null): FOOD, TRANSPORT, ESSENTIALS, EXTRAS,
             SUBSCRIPTION.
 
             This user's own past answers for other counterparts:
             $exampleLines
 
-            New transaction to classify:
+            Transaction to classify:
             Direction: ${transaction.direction}
             Amount: ${transaction.amount}
             Counterpart: ${transaction.counterpartName}
+            $balanceContext
 
-            $instructions
+            $noteInstruction
         """.trimIndent()
     }
 
-    private fun parseAndValidate(raw: String): ClassificationResult? {
+    private fun parseAndValidate(raw: String): Guess? {
         return try {
             val jsonText = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1)
             val obj = JSONObject(jsonText)
-            val guessObj = obj.getJSONObject("guess")
-            val kind = TransactionKind.fromStorage(guessObj.optString("kind").takeIf { it.isNotBlank() })
-            val category = guessObj.optString("category")
-                .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
-                ?.let { ExpenseCategory.fromStorage(it) }
-            val isPerson = guessObj.optBoolean("isPerson", false)
-            val confidence = obj.optDouble("confidence", 0.0).toFloat().coerceIn(0f, 1f)
-
-            val questionsArray = obj.optJSONArray("questions") ?: JSONArray()
-            val questions = (0 until minOf(questionsArray.length(), MAX_QUESTIONS)).mapNotNull { i ->
-                val q = questionsArray.optJSONObject(i) ?: return@mapNotNull null
-                val text = q.optString("question").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val optionsArray = q.optJSONArray("options") ?: return@mapNotNull null
-                val options = (0 until optionsArray.length())
-                    .mapNotNull { j -> optionsArray.optString(j).takeIf { it.isNotBlank() } }
-                if (options.size !in 2..4) return@mapNotNull null
-                Question(text, options)
+            val kind = TransactionKind.fromStorage(obj.optString("kind").takeIf { it.isNotBlank() })
+            // The prompt tells the model category only applies to EXPENSE, but a small model
+            // doesn't always follow that — enforced here rather than trusted, same as every
+            // other field.
+            val category = if (kind != TransactionKind.EXPENSE) {
+                null
+            } else {
+                obj.optString("category")
+                    .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                    ?.let { ExpenseCategory.fromStorage(it) }
             }
-            ClassificationResult(Guess(kind, category, isPerson, confidence), questions)
+            val isPerson = obj.optBoolean("isPerson", false)
+            val confidence = obj.optDouble("confidence", 0.0).toFloat().coerceIn(0f, 1f)
+            Guess(kind, category, isPerson, confidence)
         } catch (e: Exception) {
             null
         }

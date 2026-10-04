@@ -20,8 +20,33 @@ object ModelDownloader {
     private const val PREFS = "model_downloader"
     private const val KEY_DOWNLOAD_ID = "download_id"
 
-    data class DownloadProgress(val status: Int, val bytesDownloaded: Long, val bytesTotal: Long) {
+    data class DownloadProgress(val status: Int, val reason: Int, val bytesDownloaded: Long, val bytesTotal: Long) {
         val fraction: Float get() = if (bytesTotal > 0) (bytesDownloaded.toFloat() / bytesTotal).coerceIn(0f, 1f) else 0f
+
+        /** Human-readable reason the download is paused/failed, when there's something more
+         * useful to say than just "pending" — DownloadManager fails silently (no exception, no
+         * logcat) when it's simply waiting on a condition that'll never be true, like a Wi-Fi
+         * requirement the phone isn't satisfying, which otherwise just looks like "stuck". */
+        fun reasonLabel(): String? = when (status) {
+            DownloadManager.STATUS_PAUSED -> when (reason) {
+                DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "waiting for a network connection"
+                DownloadManager.PAUSED_WAITING_TO_RETRY -> "waiting to retry after a connection error"
+                DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "waiting for Wi-Fi"
+                DownloadManager.PAUSED_UNKNOWN -> "paused for an unknown reason"
+                else -> "paused"
+            }
+            DownloadManager.STATUS_FAILED -> when (reason) {
+                DownloadManager.ERROR_INSUFFICIENT_SPACE -> "not enough free storage"
+                DownloadManager.ERROR_DEVICE_NOT_FOUND -> "storage not found"
+                DownloadManager.ERROR_HTTP_DATA_ERROR -> "a network data error"
+                DownloadManager.ERROR_CANNOT_RESUME -> "couldn't resume after being interrupted"
+                DownloadManager.ERROR_FILE_ERROR -> "a file error"
+                DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "too many redirects"
+                DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "an unexpected server response"
+                else -> "error code $reason"
+            }
+            else -> null
+        }
     }
 
     fun modelFile(context: Context): File = File(context.getExternalFilesDir(null), MODEL_FILE_NAME)
@@ -40,8 +65,12 @@ object ModelDownloader {
             .setDescription("Qwen2.5-1.5B-Instruct (~1.0 GB)")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationUri(Uri.fromFile(modelFile(context)))
-            .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
-            .setAllowedOverRoaming(false)
+            // Deliberately NOT restricted to Wi-Fi: DownloadManager fails completely silently
+            // when a network-type restriction isn't met — the job just sits at
+            // STATUS_PAUSED/PAUSED_QUEUED_FOR_WIFI forever with no error surfaced anywhere,
+            // which is exactly what "stuck at 0%" looks like from the UI. Any network is
+            // allowed; the ~1GB size is already disclosed in the settings row.
+            .setAllowedOverRoaming(true)
         val id = downloadManager(context).enqueue(request)
         prefs(context).edit().putLong(KEY_DOWNLOAD_ID, id).apply()
     }
@@ -60,12 +89,13 @@ object ModelDownloader {
         downloadManager(context).query(DownloadManager.Query().setFilterById(id)).use { cursor ->
             if (!cursor.moveToFirst()) return null
             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
             val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
             val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
             if (status == DownloadManager.STATUS_SUCCESSFUL) {
                 prefs(context).edit().remove(KEY_DOWNLOAD_ID).apply()
             }
-            return DownloadProgress(status, downloaded, total)
+            return DownloadProgress(status, reason, downloaded, total)
         }
     }
 }

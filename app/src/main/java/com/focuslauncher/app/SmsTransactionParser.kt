@@ -12,8 +12,8 @@ data class ParsedTransaction(
 /**
  * Bank SMS formats vary a lot (and there's no universal standard), so this covers the common
  * phrasing seen in Indian bank/UPI alerts — debit e.g. "Sent Rs.237.00 from A/c *1234 on
- * 28-09-26 to EXAMPLE MERCHANT PRIVATE LIMITED" or "Rs 450 debited from your account for Swiggy";
- * credit e.g. "Your A/c *1234 is credited with Rs.63.00 on 02-10-26 by Mr John
+ * 28-09-26 to EXAMPLE MERCHANT PRIVATE LIMITED" or "Rs 450 debited from your account for
+ * Swiggy"; credit e.g. "Your A/c *1234 is credited with Rs.63.00 on 02-10-26 by Mr John
  * Doe. RRN ...". Messages that don't look like either (OTPs, promotions) are skipped.
  */
 object SmsTransactionParser {

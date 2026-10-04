@@ -5,14 +5,14 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 private const val DB_NAME = "expenses.db"
-private const val DB_VERSION = 2
+private const val DB_VERSION = 3
 
 /**
- * Plain SQLite (no Room) — consistent with the rest of this app. Version 2 is a full rebuild,
- * not a migration: it replaces simple category-only tagging with a richer model (expense vs.
- * lent/borrowed/repayment, confidence, who resolved it) that the on-device LLM classifier needs,
- * and there's no sensible mapping from "a category" to "a kind + category + counterpart" — the
- * user asked to wipe everything and start fresh, so upgrading just drops the old tables.
+ * Plain SQLite (no Room) — consistent with the rest of this app. Each version bump so far is a
+ * full rebuild, not a migration — there's no sensible mapping from the old shape to the new one,
+ * so upgrading just drops every table and recreates them. Version 3 drops the MCQ pending-
+ * questions queue: transactions are now auto-tagged immediately with no follow-up questions, and
+ * a wrong guess is corrected with a free-text note instead.
  */
 class ExpenseDbHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
     override fun onCreate(db: SQLiteDatabase) {
@@ -45,19 +45,6 @@ class ExpenseDbHelper(context: Context) : SQLiteOpenHelper(context, DB_NAME, nul
                 is_person INTEGER NOT NULL DEFAULT 0,
                 confirm_count INTEGER NOT NULL DEFAULT 1,
                 updated_at INTEGER NOT NULL
-            )
-            """.trimIndent()
-        )
-        // The home screen's MCQ card queue. Up to 4 rows per transaction (question_index 0-3).
-        db.execSQL(
-            """
-            CREATE TABLE pending_questions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                transaction_id INTEGER NOT NULL,
-                question_index INTEGER NOT NULL,
-                question_text TEXT NOT NULL,
-                options_json TEXT NOT NULL,
-                answered_option TEXT
             )
             """.trimIndent()
         )

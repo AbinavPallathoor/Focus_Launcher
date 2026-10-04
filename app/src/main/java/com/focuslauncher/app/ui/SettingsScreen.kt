@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.focuslauncher.app.AppInfo
+import com.focuslauncher.app.ClassifierPerformanceMode
+import com.focuslauncher.app.ClassifierPerformanceStore
 import com.focuslauncher.app.ModelDownloader
 import com.focuslauncher.app.RADIAL_GROUP_BOTTOM
 import com.focuslauncher.app.RADIAL_GROUP_UPPER
@@ -92,6 +94,7 @@ fun SettingsScreen(
             if (expenseTrackerEnabled) {
                 item { ActionRow(label = "Open dashboard", onTap = onOpenExpenseTracker) }
                 item { ModelDownloadRow() }
+                item { ClassifierPerformanceRow() }
             }
             item { SectionHeader("Gestures") }
             item {
@@ -318,34 +321,88 @@ private fun ModelDownloadRow() {
         while (!modelReady) {
             val latest = ModelDownloader.currentProgress(context)
             progress = latest
-            val active = latest != null &&
-                (latest.status == DownloadManager.STATUS_RUNNING || latest.status == DownloadManager.STATUS_PENDING)
-            if (!active) modelReady = ModelDownloader.isModelReady(context)
-            delay(if (active) 500 else 1500)
+            val inFlight = latest != null && latest.status != DownloadManager.STATUS_SUCCESSFUL
+            if (!inFlight) modelReady = ModelDownloader.isModelReady(context)
+            delay(if (latest?.status == DownloadManager.STATUS_RUNNING) 500 else 1500)
         }
     }
 
-    val isActive = progress?.status == DownloadManager.STATUS_RUNNING || progress?.status == DownloadManager.STATUS_PENDING
+    val status = progress?.status
+    val isRunning = status == DownloadManager.STATUS_RUNNING
+    val isQueued = status == DownloadManager.STATUS_PENDING
+    // A download the user can cancel/retry out of — anything that's been enqueued and isn't
+    // already sitting as a finished file.
+    val isInFlight = status != null && !modelReady
+    val reason = progress?.reasonLabel()
+
     val label = when {
         modelReady -> "AI model ready"
-        isActive -> "Downloading AI model… ${((progress?.fraction ?: 0f) * 100).toInt()}%"
-        progress?.status == DownloadManager.STATUS_FAILED -> "Download failed — tap to retry"
-        else -> "Download AI model (1.0 GB, Wi-Fi)"
+        isRunning -> "Downloading AI model… ${((progress?.fraction ?: 0f) * 100).toInt()}%"
+        isQueued -> "Download queued…"
+        reason != null -> "Download stalled — $reason"
+        isInFlight -> "Preparing download…"
+        else -> "Download AI model (1.0 GB)"
     }
-    Text(
-        text = label,
-        style = MaterialTheme.typography.bodyLarge,
-        color = if (modelReady) PureWhite else SubtextGrey,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (modelReady) PureWhite else SubtextGrey,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .clickable(enabled = !modelReady && !isInFlight) {
+                    ModelDownloader.startDownload(context)
+                    progress = ModelDownloader.currentProgress(context)
+                }
+        )
+        if (isInFlight) {
+            Text(
+                text = "Cancel",
+                style = MaterialTheme.typography.bodyLarge,
+                color = PureWhite,
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .clickable {
+                        ModelDownloader.cancelDownload(context)
+                        progress = null
+                    }
+            )
+        }
+    }
+}
+
+/**
+ * Cycles the classifier's CPU thread count through three presets. The emulator used during
+ * development stays slow regardless — real phones have real cores to spend, and this is the one
+ * lever that actually maps "how fast the device is" to "how fast classification runs" without
+ * touching output quality (greedy, grammar-constrained decoding doesn't have a "thinks harder"
+ * knob the way a bigger model would).
+ */
+@Composable
+private fun ClassifierPerformanceRow() {
+    val context = LocalContext.current
+    var mode by remember { mutableStateOf(ClassifierPerformanceStore.getMode(context)) }
+    val modes = ClassifierPerformanceMode.entries
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !modelReady && !isActive) {
-                ModelDownloader.startDownload(context)
-                progress = ModelDownloader.currentProgress(context)
+            .clickable {
+                val next = modes[(modes.indexOf(mode) + 1) % modes.size]
+                ClassifierPerformanceStore.setMode(context, next)
+                mode = next
             }
-            .padding(vertical = 10.dp)
-    )
+            .padding(vertical = 10.dp),
+    ) {
+        Text(text = "AI mode", style = MaterialTheme.typography.bodyLarge, color = PureWhite)
+        Box(modifier = Modifier.weight(1f))
+        Text(text = mode.label, style = MaterialTheme.typography.bodyLarge, color = SubtextGrey)
+    }
 }
 
 @Composable

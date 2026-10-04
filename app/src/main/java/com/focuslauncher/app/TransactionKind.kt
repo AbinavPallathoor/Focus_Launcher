@@ -30,3 +30,15 @@ enum class ResolvedBy {
             entries.firstOrNull { it.name == value } ?: UNKNOWN
     }
 }
+
+/** The single short tag shown in the terminal feed: the category for an EXPENSE, the kind for
+ * anything else (both repayment directions collapse to one tag — the feed row's own debit/
+ * credit amount already carries the direction). */
+fun transactionTag(kind: TransactionKind, category: ExpenseCategory?): String = when (kind) {
+    TransactionKind.EXPENSE -> category?.label?.lowercase() ?: "expense"
+    TransactionKind.LENT -> "lent"
+    TransactionKind.BORROWED -> "borrowed"
+    TransactionKind.REPAYMENT_IN, TransactionKind.REPAYMENT_OUT -> "repayment"
+    TransactionKind.INCOME -> "income"
+    TransactionKind.UNKNOWN -> "unsorted"
+}

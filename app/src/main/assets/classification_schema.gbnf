@@ -1,24 +1,12 @@
-# Constrains the classifier model to emit only valid, schema-exact JSON. Every rule is kept
-# on a single line (even the longer alternations) -- a line starting with a bare "|" is not
-# a safe continuation of the previous line here, unlike inside an already-open paren/bracket.
-root ::= "{" ws "\"guess\":" ws guess "," ws "\"confidence\":" ws confidence "," ws "\"questions\":" ws questions ws "}"
-
-guess ::= "{" ws "\"kind\":" ws kind "," ws "\"category\":" ws category "," ws "\"isPerson\":" ws bool ws "}"
+# Constrains the classifier model to emit only valid, schema-exact JSON — a single flat
+# object, no follow-up questions. Every transaction gets tagged immediately; the user corrects
+# a wrong guess afterward with a free-text note rather than being asked anything up front.
+root ::= "{" ws "\"kind\":" ws kind "," ws "\"category\":" ws category "," ws "\"isPerson\":" ws bool "," ws "\"confidence\":" ws confidence ws "}"
 
 kind ::= "\"EXPENSE\"" | "\"LENT\"" | "\"BORROWED\"" | "\"REPAYMENT_IN\"" | "\"REPAYMENT_OUT\"" | "\"INCOME\""
 category ::= "\"FOOD\"" | "\"TRANSPORT\"" | "\"ESSENTIALS\"" | "\"EXTRAS\"" | "\"SUBSCRIPTION\"" | "null"
 bool ::= "true" | "false"
 
 confidence ::= [01] "." [0-9] [0-9]?
-
-questions ::= "[]" | ("[" ws question ws "]") | ("[" ws question ws "," ws question ws "]") | ("[" ws question ws "," ws question ws "," ws question ws "]") | ("[" ws question ws "," ws question ws "," ws question ws "," ws question ws "]")
-
-question ::= "{" ws "\"question\":" ws string "," ws "\"options\":" ws options ws "}"
-
-options ::= ("[" ws string ws "," ws string ws "]") | ("[" ws string ws "," ws string ws "," ws string ws "]") | ("[" ws string ws "," ws string ws "," ws string ws "," ws string ws "]")
-
-string ::= "\"" char* "\""
-char ::= [^"\\\x00-\x1f] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex
-hex ::= [0-9a-fA-F]
 
 ws ::= [ \t\n]*

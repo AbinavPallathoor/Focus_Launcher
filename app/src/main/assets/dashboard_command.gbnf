@@ -1,0 +1,20 @@
+# Constrains the model interpreting a free-text dashboard command to one of four actions
+# against a numbered list of recent transactions (the numbering is internal — only the prompt
+# sees it, never shown in the UI). All fields are always present for grammar simplicity; the
+# Kotlin side only reads the ones relevant to the chosen action. No "direction" field on
+# purpose — the model was unreliable at it even with an explicit rule spelled out in the
+# prompt; Kotlin derives DEBIT/CREDIT deterministically from kind instead.
+root ::= "{" ws "\"action\":" ws action "," ws "\"targetIndex\":" ws int "," ws "\"counterpartName\":" ws string "," ws "\"amount\":" ws number "," ws "\"kind\":" ws kind "," ws "\"category\":" ws category ws "}"
+
+action ::= "\"ADD\"" | "\"REMOVE\"" | "\"MODIFY\"" | "\"NONE\""
+kind ::= "\"EXPENSE\"" | "\"LENT\"" | "\"BORROWED\"" | "\"REPAYMENT_IN\"" | "\"REPAYMENT_OUT\"" | "\"INCOME\""
+category ::= "\"FOOD\"" | "\"TRANSPORT\"" | "\"ESSENTIALS\"" | "\"EXTRAS\"" | "\"SUBSCRIPTION\"" | "null"
+
+int ::= "0" | [1-9] [0-9]?
+number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)?
+
+string ::= "\"" char* "\""
+char ::= [^"\\\x00-\x1f] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex
+hex ::= [0-9a-fA-F]
+
+ws ::= [ \t\n]*

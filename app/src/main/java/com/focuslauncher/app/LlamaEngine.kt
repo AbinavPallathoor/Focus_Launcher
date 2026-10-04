@@ -2,8 +2,11 @@ package com.focuslauncher.app
 
 /**
  * Thin JNI bridge to a vendored llama.cpp (see `src/main/cpp/`). Deliberately tiny: load a
- * GGUF model once, run grammar-constrained generation against it, nothing else. All the
- * "is this output trustworthy" logic lives in Kotlin (TransactionClassifier), not here.
+ * GGUF model once, run grammar-constrained generation against it, nothing else. The grammar is
+ * supplied fresh on every [generate] call rather than fixed at [load] time, since more than one
+ * feature now shares this one loaded model against different output schemas (the per-transaction
+ * classifier, the dashboard's free-text command bar). All the "is this output trustworthy" logic
+ * lives in Kotlin (TransactionClassifier, DashboardCommandInterpreter), not here.
  *
  * Every entry point is wrapped against Throwable (not just the expected UnsatisfiedLinkError):
  * a native crash here must degrade to "couldn't classify, try again later" for the caller, never
@@ -27,25 +30,28 @@ object LlamaEngine {
 
     fun isLoaded(): Boolean = loaded
 
-    /** Loads the model and compiles [grammarText] once. Safe to call repeatedly; a no-op if already loaded. */
+    /** Loads the model using [threads] CPU threads for inference. Safe to call repeatedly; a
+     * no-op if already loaded (the thread count only takes effect on the load that actually
+     * happens). */
     @Synchronized
-    fun load(modelPath: String, grammarText: String): Boolean {
+    fun load(modelPath: String, threads: Int): Boolean {
         if (loaded) return true
         if (!ensureNativeLib()) return false
         loaded = try {
-            nativeLoad(modelPath, grammarText)
+            nativeLoad(modelPath, threads.coerceAtLeast(1))
         } catch (e: Throwable) {
             false
         }
         return loaded
     }
 
-    /** Runs the prompt through the model with the loaded grammar applied; null on any failure. */
+    /** Runs the prompt through the model with [grammarText] constraining the output for this
+     * one call; null on any failure. */
     @Synchronized
-    fun generate(prompt: String, maxTokens: Int): String? {
+    fun generate(prompt: String, maxTokens: Int, grammarText: String): String? {
         if (!loaded) return null
         return try {
-            nativeGenerate(prompt, maxTokens)
+            nativeGenerate(prompt, maxTokens, grammarText)
         } catch (e: Throwable) {
             null
         }
@@ -63,7 +69,7 @@ object LlamaEngine {
         }
     }
 
-    private external fun nativeLoad(modelPath: String, grammarText: String): Boolean
-    private external fun nativeGenerate(prompt: String, maxTokens: Int): String?
+    private external fun nativeLoad(modelPath: String, threads: Int): Boolean
+    private external fun nativeGenerate(prompt: String, maxTokens: Int, grammarText: String): String?
     private external fun nativeUnload()
 }

@@ -104,14 +104,14 @@ private fun LauncherRoot() {
 
     var expenseTrackerEnabled by remember { mutableStateOf(ExpenseRepository.isEnabled(context)) }
     var expenseRefreshTick by remember { mutableStateOf(0) }
+    var isProcessingDashboardCommand by remember { mutableStateOf(false) }
     // Cheap no-op queries against empty tables when the tracker is off, so it's simpler to
     // always compute these than to thread an enabled check through every call site.
     val todayExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
     val monthlyExpenseTotal = remember(expenseRefreshTick) { ExpenseRepository.getMonthTotal(context) }
     val categoryTotalsMonth = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
     val untaggedExpenseCount = remember(expenseRefreshTick) { ExpenseRepository.getUnclassifiedCounterparts(context).size }
-    val pendingQuestion = remember(expenseRefreshTick) { ExpenseRepository.getNextPendingQuestion(context) }
-    val pendingQuestionCount = remember(expenseRefreshTick) { ExpenseRepository.getPendingQuestionCount(context) }
+    val recentTransactionsForFeed = remember(expenseRefreshTick) { ExpenseRepository.getRecentTransactions(context, limit = 4) }
     val coroutineScope = rememberCoroutineScope()
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -133,13 +133,35 @@ private fun LauncherRoot() {
         screen = Screen.ExpenseTracker(returnTo)
     }
 
-    // Both classifying and answering a question run real (slow) LLM inference — always off
+    // Both classifying and correcting a transaction run real (slow) LLM inference — always off
     // the main thread, never directly in a click handler.
-    fun answerQuestion(questionId: Long, answer: String) {
+    fun correctTransaction(transactionId: Long, note: String) {
         coroutineScope.launch {
             withContext(Dispatchers.Default) {
-                ExpenseRepository.answerPendingQuestion(context, questionId, answer)
+                ExpenseRepository.correctTransaction(context, transactionId, note)
             }
+            expenseRefreshTick++
+        }
+    }
+
+    // No LLM involved — a plain SQLite write — but still off the main thread for consistency
+    // with every other repository write.
+    fun confirmTransaction(transactionId: Long) {
+        coroutineScope.launch {
+            withContext(Dispatchers.Default) {
+                ExpenseRepository.confirmTransaction(context, transactionId)
+            }
+            expenseRefreshTick++
+        }
+    }
+
+    fun runDashboardCommand(command: String) {
+        isProcessingDashboardCommand = true
+        coroutineScope.launch {
+            withContext(Dispatchers.Default) {
+                ExpenseRepository.runDashboardCommand(context, command)
+            }
+            isProcessingDashboardCommand = false
             expenseRefreshTick++
         }
     }
@@ -236,9 +258,9 @@ private fun LauncherRoot() {
                     categoryTotalsMonth = categoryTotalsMonth,
                     untaggedExpenseCount = untaggedExpenseCount,
                     onOpenExpenseTracker = { openExpenseTracker(Screen.Home) },
-                    pendingQuestion = pendingQuestion,
-                    pendingQuestionCount = pendingQuestionCount,
-                    onAnswerQuestion = { questionId, answer -> answerQuestion(questionId, answer) },
+                    recentTransactions = recentTransactionsForFeed,
+                    onCorrectTransaction = { transactionId, note -> correctTransaction(transactionId, note) },
+                    onConfirmTransaction = { transactionId -> confirmTransaction(transactionId) },
                 )
             }
             is Screen.Settings -> {
@@ -299,21 +321,21 @@ private fun LauncherRoot() {
                 )
             }
             is Screen.ExpenseTracker -> {
-                val unclassified = remember(expenseRefreshTick) { ExpenseRepository.getUnclassifiedCounterparts(context) }
                 val todayTotal = remember(expenseRefreshTick) { ExpenseRepository.getTodayTotal(context) }
                 val categoryTotals = remember(expenseRefreshTick) { ExpenseRepository.getCategoryTotalsMonth(context) }
                 val dailyTotals = remember(expenseRefreshTick) { ExpenseRepository.getDailyTotals(context, 14) }
                 val recentTransactions = remember(expenseRefreshTick) { ExpenseRepository.getRecentTransactions(context) }
+                val debtLedger = remember(expenseRefreshTick) { ExpenseRepository.getDebtLedger(context) }
                 ExpenseTrackerScreen(
                     todayTotal = todayTotal,
                     categoryTotals = categoryTotals,
                     dailyTotals = dailyTotals,
-                    untaggedMerchants = unclassified,
                     recentTransactions = recentTransactions,
-                    onTagMerchant = { counterpart, category ->
-                        ExpenseRepository.classify(context, counterpart, TransactionKind.EXPENSE, category, isPerson = false)
-                        expenseRefreshTick++
-                    },
+                    debtLedger = debtLedger,
+                    isProcessingCommand = isProcessingDashboardCommand,
+                    onCorrectTransaction = { transactionId, note -> correctTransaction(transactionId, note) },
+                    onConfirmTransaction = { transactionId -> confirmTransaction(transactionId) },
+                    onCommand = { command -> runDashboardCommand(command) },
                     onClose = { screen = currentScreen.returnTo },
                 )
             }
